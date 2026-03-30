@@ -201,6 +201,8 @@ function renderChatMessages() {
 
     const text = document.createElement("span");
     text.textContent = msg.text || "";
+    if (msg.kind === "accepted") text.classList.add("chat-status-accepted");
+    if (msg.kind === "rejected") text.classList.add("chat-status-rejected");
 
     p.appendChild(time);
     p.appendChild(name);
@@ -214,6 +216,20 @@ function addChatMessage(msg) {
   chatMessages.push(msg);
   if (chatMessages.length > 80) chatMessages.shift();
   renderChatMessages();
+}
+
+function addSystemChat(text, kind = "") {
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2, "0");
+  const mm = String(now.getMinutes()).padStart(2, "0");
+  const ss = String(now.getSeconds()).padStart(2, "0");
+  addChatMessage({
+    time: now.getTime(),
+    timeText: `${hh}:${mm}:${ss}`,
+    name: "System",
+    text,
+    kind
+  });
 }
 
 function hasCustomName() {
@@ -600,7 +616,7 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     tryShoot();
   }
-  if (k === "r") {
+  if (k === "r" && !e.ctrlKey && !e.metaKey && !e.altKey) {
     e.preventDefault();
     tryReload();
   }
@@ -859,6 +875,7 @@ socket.on("restart_cancelled", ({ reason }) => {
   restartPending = false;
   restartRequesterId = null;
   updateRestartPrompt();
+  addSystemChat("Restart declined.", "rejected");
   setStatus(reason || "Restart cancelled.");
 });
 
@@ -880,6 +897,7 @@ socket.on("match_restarted", () => {
   setInMatchUI(true);
   updateMatchTopbar();
   updateRestartPrompt();
+  addSystemChat("Restart accepted. Match restarted.", "accepted");
   setStatus("Match restarted.");
 });
 

@@ -319,29 +319,65 @@
       border-radius: 10px;
       padding: 12px 16px;
       margin: 0;
+      max-width: 90%;
+      overflow-wrap: anywhere;
+    }
+    .chat-status-accepted {
+      color: #57ffc8;
+      font-weight: 700;
+    }
+    .chat-status-rejected {
+      color: #ff7a86;
+      font-weight: 700;
     }
     #chatCard {
       display: grid;
       gap: 8px;
       min-height: 0;
+      min-width: 0;
+      width: 100%;
     }
     #chatComposer {
-      display: flex;
-      gap: 8px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 92px;
+      column-gap: 8px;
       align-items: center;
       margin: 0;
+      width: 100%;
+      min-width: 0;
     }
     #chatInput {
-      flex: 1 1 auto;
       min-width: 0;
-      width: auto;
+      width: 100% !important;
+      height: 44px;
     }
     #chatSendBtn {
-      flex: 0 0 84px;
-      width: 84px;
+      width: 92px;
       height: 44px;
-      padding: 0;
+      padding: 0 12px;
       text-align: center;
+      justify-self: stretch;
+      align-self: stretch;
+    }
+    .match-chat-actions {
+      display: grid !important;
+      grid-template-columns: minmax(0, 1fr) 74px;
+      gap: 8px;
+      align-items: stretch;
+    }
+    .match-chat-actions #restartBtn {
+      height: 44px;
+      width: 100%;
+    }
+    .match-chat-actions #quitBtn {
+      height: 44px;
+      width: 74px;
+      min-width: 74px;
+      justify-self: stretch;
+      font-size: 24px;
+      padding: 0;
+      display: grid;
+      place-items: center;
     }
     body.in-match .pregame-only {
       display: none !important;
