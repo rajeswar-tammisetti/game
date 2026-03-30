@@ -5,6 +5,11 @@ const ctx = canvas.getContext("2d");
 
 const hostBtn = document.getElementById("hostBtn");
 const joinBtn = document.getElementById("joinBtn");
+const homeStartBtn = document.getElementById("homeStartBtn");
+const mode1v1Btn = document.getElementById("mode1v1Btn");
+const mode2v2Btn = document.getElementById("mode2v2Btn");
+const modeRoomBtn = document.getElementById("modeRoomBtn");
+const modeSettingsBtn = document.getElementById("modeSettingsBtn");
 const setLimitBtn = document.getElementById("setLimitBtn");
 const restartBtn = document.getElementById("restartBtn");
 const continueBtn = document.getElementById("continueBtn");
@@ -15,6 +20,9 @@ const toggleControlsBtn = document.getElementById("toggleControlsBtn");
 const setNameBtn = document.getElementById("setNameBtn");
 const quickMatchBtn = document.getElementById("quickMatchBtn");
 const cancelQuickBtn = document.getElementById("cancelQuickBtn");
+const leftSideBtn = document.getElementById("leftSideBtn");
+const rightSideBtn = document.getElementById("rightSideBtn");
+const playerColorInput = document.getElementById("playerColorInput");
 
 const roomInput = document.getElementById("roomInput");
 const scoreLimitInput = document.getElementById("scoreLimitInput");
@@ -22,6 +30,7 @@ const nameInput = document.getElementById("nameInput");
 
 const roomLabel = document.getElementById("roomLabel");
 const playersLabel = document.getElementById("playersLabel");
+const sidesLabel = document.getElementById("sidesLabel");
 const onlineLabel = document.getElementById("onlineLabel");
 const scoreMain = document.getElementById("scoreMain");
 const scoreSub = document.getElementById("scoreSub");
@@ -32,6 +41,10 @@ const feedEl = document.getElementById("feed");
 const chatListEl = document.getElementById("chatList");
 const chatInput = document.getElementById("chatInput");
 const chatSendBtn = document.getElementById("chatSendBtn");
+const topLeftNameEl = document.getElementById("topLeftName");
+const topRightNameEl = document.getElementById("topRightName");
+const topTimeEl = document.getElementById("topTime");
+const topScoreEl = document.getElementById("topScore");
 
 const restartPrompt = document.getElementById("restartPrompt");
 const restartPromptText = document.getElementById("restartPromptText");
@@ -45,10 +58,6 @@ const challengeDeclineBtn = document.getElementById("challengeDeclineBtn");
 const mobileControls = document.getElementById("mobileControls");
 const joystickBase = document.getElementById("joystickBase");
 const joystickKnob = document.getElementById("joystickKnob");
-const upBtn = document.getElementById("upBtn");
-const downBtn = document.getElementById("downBtn");
-const leftBtn = document.getElementById("leftBtn");
-const rightBtn = document.getElementById("rightBtn");
 const fireBtn = document.getElementById("fireBtn");
 const reloadBtn = document.getElementById("reloadBtn");
 
@@ -81,6 +90,11 @@ let restartPending = false;
 let restartRequesterId = null;
 let pendingChallengeFromId = null;
 let controlsForcedVisible = false;
+let preferredSide = "left";
+let myColor = "#58a0ff";
+let roomSides = { left: null, right: null };
+let selectedMode = "1v1";
+let matchStartedAt = 0;
 
 let players = {};
 let pickup = { active: false, type: null, x: 0, y: 0 };
@@ -108,7 +122,12 @@ const joystick = {
 let fireHoldTimer = null;
 let audioCtx = null;
 let mouseFireHeld = false;
-const dpadPressCount = { up: 0, down: 0, left: 0, right: 0 };
+const gridHover = {
+  active: false,
+  x: canvas.width * 0.5,
+  y: canvas.height * 0.5,
+  lastMoveAt: 0
+};
 
 function ensureAudio() {
   if (!audioCtx) {
@@ -160,6 +179,16 @@ function appendFeed(text) {
 function renderChatMessages() {
   updateChatModeLabel();
   chatListEl.innerHTML = "";
+  if (chatMessages.length === 0) {
+    chatListEl.classList.add("empty");
+    const empty = document.createElement("p");
+    empty.className = "chat-empty";
+    empty.textContent = "No messages yet";
+    chatListEl.appendChild(empty);
+    chatListEl.scrollTop = 0;
+    return;
+  }
+  chatListEl.classList.remove("empty");
   for (const msg of chatMessages.slice(-40)) {
     const p = document.createElement("p");
     const time = document.createElement("span");
@@ -208,6 +237,15 @@ function sendChat() {
   if (!text) return;
   socket.emit("chat_send", { text });
   chatInput.value = "";
+}
+
+function requestRestart() {
+  if (!roomCode) {
+    setStatus("Join a room first.", true);
+    return;
+  }
+  setStatus("Restart requested. Waiting for opponent...");
+  socket.emit("request_restart");
 }
 
 function updateScore() {
@@ -261,6 +299,40 @@ function updateRestartPrompt() {
   restartPrompt.style.display = show ? "block" : "none";
 }
 
+function updateSideButtons() {
+  if (leftSideBtn) leftSideBtn.classList.toggle("active-side", preferredSide === "left");
+  if (rightSideBtn) rightSideBtn.classList.toggle("active-side", preferredSide === "right");
+}
+
+function updateModeButtons() {
+  mode1v1Btn.classList.toggle("active-mode", selectedMode === "1v1");
+  mode2v2Btn.classList.toggle("active-mode", selectedMode === "2v2");
+  modeRoomBtn.classList.toggle("active-mode", selectedMode === "room");
+  modeSettingsBtn.classList.toggle("active-mode", selectedMode === "settings");
+}
+
+function updateMatchTopbar() {
+  const leftId = roomSides.left?.id || Object.keys(players).find((id) => players[id]?.side === "left");
+  const rightId = roomSides.right?.id || Object.keys(players).find((id) => players[id]?.side === "right");
+  const leftName = leftId ? (players[leftId]?.name || roomSides.left?.name || "Player 1") : "Player 1";
+  const rightName = rightId ? (players[rightId]?.name || roomSides.right?.name || "Player 2") : "Player 2";
+  const leftScore = leftId ? (players[leftId]?.kills || 0) : 0;
+  const rightScore = rightId ? (players[rightId]?.kills || 0) : 0;
+
+  topLeftNameEl.textContent = leftName;
+  topRightNameEl.textContent = rightName;
+  topScoreEl.textContent = `${leftScore} - ${rightScore}`;
+
+  if (!matchStartedAt || !matchReady) {
+    topTimeEl.textContent = "00:00";
+    return;
+  }
+  const sec = Math.max(0, Math.floor((Date.now() - matchStartedAt) / 1000));
+  const mm = String(Math.floor(sec / 60)).padStart(2, "0");
+  const ss = String(sec % 60).padStart(2, "0");
+  topTimeEl.textContent = `${mm}:${ss}`;
+}
+
 function applyControlsVisibility() {
   const show = controlsForcedVisible || isTouchDevice;
   mobileControls.style.display = show ? "flex" : "none";
@@ -288,26 +360,10 @@ function sendInput() {
 }
 
 function setMoveFromJoystick(nx, ny) {
-  const joyLeft = nx < -0.25;
-  const joyRight = nx > 0.25;
-  const joyUp = ny < -0.25;
-  const joyDown = ny > 0.25;
-  input.left = joyLeft || dpadPressCount.left > 0;
-  input.right = joyRight || dpadPressCount.right > 0;
-  input.up = joyUp || dpadPressCount.up > 0;
-  input.down = joyDown || dpadPressCount.down > 0;
-}
-
-function refreshMoveInputFromButtons() {
-  const hasJoy = joystick.active;
-  const joyTransform = hasJoy ? joystickKnob.style.transform : "";
-  if (hasJoy && joyTransform && joyTransform !== "translate(0px, 0px)") {
-    return;
-  }
-  input.left = dpadPressCount.left > 0;
-  input.right = dpadPressCount.right > 0;
-  input.up = dpadPressCount.up > 0;
-  input.down = dpadPressCount.down > 0;
+  input.left = nx < -0.25;
+  input.right = nx > 0.25;
+  input.up = ny < -0.25;
+  input.down = ny > 0.25;
 }
 
 function updateAimFromClientPos(clientX, clientY) {
@@ -316,6 +372,16 @@ function updateAimFromClientPos(clientX, clientY) {
   const sy = (clientY - r.top) / r.height;
   input.aimX = clamp(sx * canvas.width, 0, canvas.width);
   input.aimY = clamp(sy * canvas.height, 0, canvas.height);
+}
+
+function updateGridHoverFromClientPos(clientX, clientY) {
+  const r = canvas.getBoundingClientRect();
+  const sx = (clientX - r.left) / r.width;
+  const sy = (clientY - r.top) / r.height;
+  gridHover.x = clamp(sx * canvas.width, 0, canvas.width);
+  gridHover.y = clamp(sy * canvas.height, 0, canvas.height);
+  gridHover.active = true;
+  gridHover.lastMoveAt = Date.now();
 }
 
 function resetJoystick() {
@@ -388,7 +454,7 @@ function tryShoot() {
 
 hostBtn.onclick = () => {
   if (!requireNameBeforePlay()) return;
-  socket.emit("create_room");
+  socket.emit("create_room", { preferredSide });
   setStatus("Creating room...");
 };
 
@@ -399,7 +465,7 @@ joinBtn.onclick = () => {
     setStatus("Enter room code first.", true);
     return;
   }
-  socket.emit("join_room", { roomCode: code });
+  socket.emit("join_room", { roomCode: code, preferredSide });
   setStatus(`Joining ${code}...`);
 };
 
@@ -410,9 +476,9 @@ setLimitBtn.onclick = () => {
   socket.emit("set_score_limit", { limit });
 };
 
-restartBtn.onclick = () => socket.emit("request_restart");
+restartBtn.onclick = requestRestart;
 continueBtn.onclick = () => socket.emit("leave_room");
-restartMatchBtn.onclick = () => socket.emit("request_restart");
+restartMatchBtn.onclick = requestRestart;
 quitBtn.onclick = () => socket.emit("leave_room");
 restartAcceptBtn.onclick = () => socket.emit("respond_restart", { accept: true });
 restartDeclineBtn.onclick = () => socket.emit("respond_restart", { accept: false });
@@ -443,6 +509,62 @@ quickMatchBtn.onclick = () => {
   socket.emit("request_quick_match");
 };
 cancelQuickBtn.onclick = () => socket.emit("cancel_quick_match");
+homeStartBtn.onclick = () => {
+  if (!requireNameBeforePlay()) return;
+  if (selectedMode === "2v2") {
+    setStatus("2v2 is coming soon. Use 1v1 or Room mode for now.", true);
+    return;
+  }
+  if (selectedMode === "room") {
+    socket.emit("create_room", { preferredSide });
+    setStatus("Creating room...");
+    return;
+  }
+  if (selectedMode === "settings") {
+    setStatus("Settings mode selected. Configure options below.", false);
+    return;
+  }
+  socket.emit("request_quick_match");
+};
+mode1v1Btn.onclick = () => {
+  selectedMode = "1v1";
+  updateModeButtons();
+  setStatus("Mode: 1v1 quick match.");
+};
+mode2v2Btn.onclick = () => {
+  selectedMode = "2v2";
+  updateModeButtons();
+  setStatus("2v2 mode is not available yet.", true);
+};
+modeRoomBtn.onclick = () => {
+  selectedMode = "room";
+  updateModeButtons();
+  setStatus("Mode: Room match (create/join by code).");
+};
+modeSettingsBtn.onclick = () => {
+  selectedMode = "settings";
+  updateModeButtons();
+  setStatus("Settings mode. Adjust sound/controls/side/color.");
+};
+if (leftSideBtn) {
+  leftSideBtn.onclick = () => {
+    preferredSide = "left";
+    updateSideButtons();
+    if (roomCode) socket.emit("choose_side", { side: preferredSide });
+  };
+}
+if (rightSideBtn) {
+  rightSideBtn.onclick = () => {
+    preferredSide = "right";
+    updateSideButtons();
+    if (roomCode) socket.emit("choose_side", { side: preferredSide });
+  };
+}
+if (playerColorInput) {
+  playerColorInput.addEventListener("input", () => {
+    myColor = playerColorInput.value || "#58a0ff";
+  });
+}
 chatSendBtn.onclick = sendChat;
 chatInput.addEventListener("keydown", (e) => {
   if (e.key !== "Enter") return;
@@ -492,8 +614,18 @@ window.addEventListener("keyup", (e) => {
   if (k === "d" || k === "arrowright") input.right = false;
 });
 
-canvas.addEventListener("mousemove", (e) => updateAimFromClientPos(e.clientX, e.clientY));
+canvas.addEventListener("mousemove", (e) => {
+  updateAimFromClientPos(e.clientX, e.clientY);
+  updateGridHoverFromClientPos(e.clientX, e.clientY);
+});
 window.addEventListener("mousemove", (e) => updateAimFromClientPos(e.clientX, e.clientY));
+canvas.addEventListener("mouseenter", () => {
+  gridHover.active = true;
+  gridHover.lastMoveAt = Date.now();
+});
+canvas.addEventListener("mouseleave", () => {
+  gridHover.active = false;
+});
 
 canvas.addEventListener("mousedown", (e) => {
   if (e.button !== 0) return;
@@ -514,6 +646,8 @@ window.addEventListener("mouseup", () => {
 });
 
 applyControlsVisibility();
+updateSideButtons();
+updateModeButtons();
 
 joystickBase.addEventListener("pointerdown", (e) => {
   e.preventDefault();
@@ -536,32 +670,6 @@ const endJoy = (e) => {
 joystickBase.addEventListener("pointerup", endJoy);
 joystickBase.addEventListener("pointercancel", endJoy);
 joystickBase.addEventListener("lostpointercapture", resetJoystick);
-
-function bindDpadButton(button, dir) {
-  if (!button) return;
-  const start = (e) => {
-    e.preventDefault();
-    dpadPressCount[dir] += 1;
-    refreshMoveInputFromButtons();
-  };
-  const end = (e) => {
-    e.preventDefault();
-    dpadPressCount[dir] = Math.max(0, dpadPressCount[dir] - 1);
-    refreshMoveInputFromButtons();
-  };
-  button.addEventListener("pointerdown", start);
-  button.addEventListener("pointerup", end);
-  button.addEventListener("pointercancel", end);
-  button.addEventListener("pointerleave", end);
-  button.addEventListener("touchstart", start, { passive: false });
-  button.addEventListener("touchend", end, { passive: false });
-  button.addEventListener("touchcancel", end, { passive: false });
-}
-
-bindDpadButton(upBtn, "up");
-bindDpadButton(downBtn, "down");
-bindDpadButton(leftBtn, "left");
-bindDpadButton(rightBtn, "right");
 
 const startFire = (e) => {
   e.preventDefault();
@@ -604,7 +712,9 @@ canvas.addEventListener("touchmove", (e) => {
 socket.on("connect", () => {
   setStatus("Connected. Create, join, or quick-start.");
   setMatchOverUI(false);
+  matchStartedAt = 0;
   updateChatModeLabel();
+  updateMatchTopbar();
   socket.emit("request_chat_init");
   socket.emit("request_lobby_snapshot");
 });
@@ -682,11 +792,16 @@ socket.on("room_created", ({ roomCode: code }) => {
   setStatus("Room created. Share code to invite.");
 });
 
-socket.on("room_info", ({ roomCode: code, count, max }) => {
+socket.on("room_info", ({ roomCode: code, count, max, sides }) => {
   roomCode = code;
   roomLabel.textContent = `Room: ${code}`;
   playersLabel.textContent = `Players: ${count}/${max}`;
+  roomSides = sides || roomSides;
+  const leftName = roomSides.left?.name || "-";
+  const rightName = roomSides.right?.name || "-";
+  sidesLabel.textContent = `Sides: Left ${leftName} | Right ${rightName}`;
   updateChatModeLabel();
+  updateMatchTopbar();
 });
 
 socket.on("join_failed", ({ reason }) => setStatus(reason || "Failed to join.", true));
@@ -694,11 +809,13 @@ socket.on("join_failed", ({ reason }) => setStatus(reason || "Failed to join.", 
 socket.on("match_ready", () => {
   matchReady = true;
   matchOver = false;
+  matchStartedAt = Date.now();
   setMatchOverUI(false);
   winnerId = null;
   challengePrompt.style.display = "none";
   pendingChallengeFromId = null;
   setInMatchUI(true);
+  updateMatchTopbar();
   appendFeed("Match ready");
   setStatus("Match ready.");
 });
@@ -750,6 +867,7 @@ socket.on("restart_error", ({ reason }) => setStatus(reason || "Cannot restart n
 socket.on("match_restarted", () => {
   matchReady = true;
   matchOver = false;
+  matchStartedAt = Date.now();
   setMatchOverUI(false);
   winnerId = null;
   roundLive = false;
@@ -760,35 +878,44 @@ socket.on("match_restarted", () => {
   floatTexts.length = 0;
   muzzleFx.length = 0;
   setInMatchUI(true);
+  updateMatchTopbar();
   updateRestartPrompt();
   setStatus("Match restarted.");
 });
 
 socket.on("opponent_left", () => {
   matchReady = false;
+  matchStartedAt = 0;
   roundLive = false;
   setMatchOverUI(false);
   challengePrompt.style.display = "none";
   pendingChallengeFromId = null;
   roomCode = null;
+  roomSides = { left: null, right: null };
+  sidesLabel.textContent = "Sides: Left - | Right -";
   updateChatModeLabel();
   socket.emit("request_chat_init");
   setInMatchUI(false);
+  updateMatchTopbar();
   setStatus("Opponent left room.", true);
 });
 
 socket.on("room_closed", ({ reason }) => {
   matchReady = false;
+  matchStartedAt = 0;
   roundLive = false;
   matchOver = false;
   setMatchOverUI(false);
   winnerId = null;
   roomCode = null;
+  roomSides = { left: null, right: null };
+  sidesLabel.textContent = "Sides: Left - | Right -";
   updateChatModeLabel();
   socket.emit("request_chat_init");
   roomLabel.textContent = "Room: -";
   playersLabel.textContent = "Players: 0/2";
   setInMatchUI(false);
+  updateMatchTopbar();
   setStatus(reason || "Room closed.");
 });
 
@@ -815,6 +942,7 @@ socket.on("state", (snapshot) => {
   pickup = snapshot.pickup || pickup;
   scoreLimitInput.value = String(scoreLimit);
   updateScore();
+  updateMatchTopbar();
   updateRestartPrompt();
 });
 
@@ -874,20 +1002,39 @@ function drawArena(now) {
 
   ctx.save();
   ctx.strokeStyle = "rgba(55, 82, 112, 0.22)";
-  const offset = (now / 40) % 40;
-  for (let x = -40; x < canvas.width + 40; x += 40) {
+  const spacing = 40;
+  const offset = (now / 40) % spacing;
+  for (let x = -spacing; x < canvas.width + spacing; x += spacing) {
     ctx.beginPath();
     ctx.moveTo(x + offset, 0);
     ctx.lineTo(x + offset, canvas.height);
     ctx.stroke();
   }
-  for (let y = -40; y < canvas.height + 40; y += 40) {
+  for (let y = -spacing; y < canvas.height + spacing; y += spacing) {
     ctx.beginPath();
     ctx.moveTo(0, y + offset);
     ctx.lineTo(canvas.width, y + offset);
     ctx.stroke();
   }
   ctx.restore();
+
+  const hoverAgeMs = Date.now() - gridHover.lastMoveAt;
+  const hoverAlpha = gridHover.active ? 1 : clamp(1 - hoverAgeMs / 300, 0, 1);
+  if (hoverAlpha > 0.01) {
+    const glow = ctx.createRadialGradient(
+      gridHover.x,
+      gridHover.y,
+      12,
+      gridHover.x,
+      gridHover.y,
+      150
+    );
+    glow.addColorStop(0, `rgba(120, 205, 255, ${0.24 * hoverAlpha})`);
+    glow.addColorStop(0.45, `rgba(95, 185, 255, ${0.12 * hoverAlpha})`);
+    glow.addColorStop(1, "rgba(95, 185, 255, 0)");
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
 
   const vignette = ctx.createRadialGradient(
     canvas.width / 2, canvas.height / 2, canvas.width * 0.1,
@@ -930,10 +1077,12 @@ function drawPickup(now) {
 }
 
 function drawPlayers(now) {
+  const mySide = selfId && players[selfId] ? players[selfId].side : null;
   for (const [id, p] of Object.entries(players)) {
     const isMe = id === selfId;
     const dead = p.isDead;
-    const c = isMe ? "#58a0ff" : "#ff647f";
+    const isFriendly = mySide && p.side === mySide;
+    const c = isMe ? myColor : (isFriendly ? "#39ffb8" : "#ff647f");
     const phase = idPhase(id);
     const bob = dead ? 0 : Math.sin(now / 210 + phase * Math.PI * 2) * 1.6;
 
@@ -950,8 +1099,10 @@ function drawPlayers(now) {
       ctx.save();
       ctx.translate(p.x + bob, p.y + bob);
       ctx.rotate(angle);
-      const gunBaseColor = isMe ? "#b8d7ff" : "#ffd1da";
-      const gunGlow = isMe ? "rgba(122,192,255,0.55)" : "rgba(255,148,170,0.55)";
+      const gunBaseColor = isMe ? myColor : (isFriendly ? "#bfffe8" : "#ffd1da");
+      const gunGlow = isMe
+        ? "rgba(88,180,255,0.55)"
+        : (isFriendly ? "rgba(74,255,194,0.52)" : "rgba(255,148,170,0.55)");
       ctx.shadowColor = gunGlow;
       ctx.shadowBlur = 8;
       ctx.fillStyle = gunBaseColor;
@@ -960,7 +1111,9 @@ function drawPlayers(now) {
       ctx.fillRect(20 - recoil, -2, 14, 4);
       ctx.restore();
 
-      ctx.strokeStyle = isMe ? "rgba(114,176,255,.8)" : "rgba(255,137,156,.8)";
+      ctx.strokeStyle = isMe
+        ? "rgba(114,176,255,.8)"
+        : (isFriendly ? "rgba(90,255,200,.8)" : "rgba(255,137,156,.8)");
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(p.x + bob, p.y + bob);
@@ -979,7 +1132,7 @@ function drawPlayers(now) {
     const bodyX = p.x + bob;
     const bodyY = p.y + bob;
     const bodyGrad = ctx.createRadialGradient(bodyX - 6, bodyY - 8, 2, bodyX, bodyY, 24);
-    bodyGrad.addColorStop(0, dead ? "#7b818a" : isMe ? "#89baff" : "#ffa4b5");
+    bodyGrad.addColorStop(0, dead ? "#7b818a" : isMe ? "#89baff" : (isFriendly ? "#9dffd8" : "#ffa4b5"));
     bodyGrad.addColorStop(1, dead ? "#4c535d" : c);
     ctx.fillStyle = bodyGrad;
     ctx.beginPath();
@@ -1163,6 +1316,7 @@ function drawHud(now) {
 
 function render(nowPerf = performance.now()) {
   const nowMs = Date.now();
+  updateMatchTopbar();
   drawArena(nowPerf);
   drawPickup(nowPerf);
   drawTracers(nowMs);

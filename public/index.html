@@ -29,16 +29,77 @@
       padding: 16px;
     }
     .app {
-      width: min(1060px, 100%);
+      width: min(1320px, 100%);
       display: grid;
       gap: 12px;
-      grid-template-columns: 260px 1fr;
+      grid-template-columns: 1fr;
+    }
+    body.in-match .app {
+      width: min(1180px, 100%);
+      grid-template-columns: 320px 1fr;
+    }
+    body.in-match {
+      align-items: stretch;
+      padding: 8px;
+    }
+    body.in-match .app {
+      height: calc(100vh - 16px);
+    }
+    body.in-match .panel {
+      height: 100%;
+      overflow: hidden;
     }
     .panel {
       background: color-mix(in oklab, var(--panel), black 10%);
       border: 1px solid var(--line);
       border-radius: 10px;
       padding: 12px;
+    }
+    #gamePanel {
+      display: none;
+    }
+    body.in-match #gamePanel {
+      display: flex;
+      flex-direction: column;
+    }
+    .match-topbar {
+      display: none;
+      margin-bottom: 8px;
+      border: 1px solid #35506f;
+      border-radius: 10px;
+      background: #111a27;
+      padding: 8px 10px;
+      align-items: center;
+      gap: 10px;
+    }
+    .top-left, .top-right {
+      flex: 1;
+      font-weight: 700;
+      color: #d8e8ff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .top-right { text-align: right; }
+    .top-center {
+      text-align: center;
+      min-width: 240px;
+    }
+    .top-time {
+      font-size: 18px;
+      font-weight: 800;
+      color: #f4fbff;
+      letter-spacing: 0.04em;
+    }
+    .top-score {
+      font-size: 13px;
+      color: #a9bdd8;
+    }
+    .top-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      margin-top: 6px;
     }
     .title { margin: 0 0 8px; font-size: 18px; font-weight: 700; }
     .sub { margin: 0 0 12px; color: var(--muted); font-size: 13px; line-height: 1.35; }
@@ -78,6 +139,38 @@
       background: #223147;
       border-color: #3a516f;
       color: #b8c8dc;
+    }
+    .side-btn.active-side {
+      background: #154635;
+      border-color: #2bffb8;
+      color: #c9ffe9;
+    }
+    .home-hub {
+      margin-bottom: 8px;
+      padding: 10px;
+      border: 1px solid #2b5b46;
+      border-left: 4px solid #2bffb8;
+      border-radius: 10px;
+      background: linear-gradient(90deg, rgba(17, 70, 52, 0.35), rgba(12, 26, 39, 0.7));
+    }
+    .start-hero {
+      background: #1b7a5b;
+      border-color: #2bffb8;
+      color: #e8fff6;
+      font-size: 16px;
+      font-weight: 800;
+      min-height: 44px;
+      width: 100%;
+    }
+    .mode-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 6px;
+    }
+    .mode-btn.active-mode {
+      background: #155443;
+      border-color: #2bffb8;
+      color: #d8ffee;
     }
     .meta { font-size: 13px; color: var(--muted); line-height: 1.5; }
     .scoreboard {
@@ -198,6 +291,58 @@
       color: #ffd27f;
       margin-right: 6px;
     }
+    .chat-stream {
+      margin-top: 0;
+      max-height: none;
+      min-height: 0;
+      overflow: auto;
+      padding-right: 2px;
+      background: linear-gradient(180deg, rgba(17, 44, 64, 0.55), rgba(13, 25, 39, 0.7));
+      border: 1px solid #294764;
+      border-radius: 10px;
+      padding: 10px;
+    }
+    .chat-stream.empty {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      overflow: hidden;
+    }
+    .chat-empty {
+      color: #89a7c8;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      background: rgba(16, 41, 59, 0.55);
+      border: 1px solid #315779;
+      border-radius: 10px;
+      padding: 12px 16px;
+      margin: 0;
+    }
+    #chatCard {
+      display: grid;
+      gap: 8px;
+      min-height: 0;
+    }
+    #chatComposer {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin: 0;
+    }
+    #chatInput {
+      flex: 1 1 auto;
+      min-width: 0;
+      width: auto;
+    }
+    #chatSendBtn {
+      flex: 0 0 84px;
+      width: 84px;
+      height: 44px;
+      padding: 0;
+      text-align: center;
+    }
     body.in-match .pregame-only {
       display: none !important;
     }
@@ -205,6 +350,9 @@
       display: none !important;
     }
     body:not(.match-over) .match-over-only {
+      display: none !important;
+    }
+    body.in-match .landing-only {
       display: none !important;
     }
     canvas {
@@ -236,42 +384,6 @@
       pointer-events: auto;
       touch-action: none;
       backdrop-filter: blur(2px);
-    }
-    .move-stack {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      align-items: center;
-      pointer-events: auto;
-    }
-    .dpad {
-      display: grid;
-      grid-template-columns: repeat(3, 36px);
-      grid-template-rows: repeat(3, 36px);
-      gap: 4px;
-      pointer-events: auto;
-    }
-    .dpad-btn {
-      border: 1px solid rgba(255, 255, 255, 0.28);
-      background: rgba(20, 31, 45, 0.85);
-      color: #dff0ff;
-      border-radius: 8px;
-      font-size: 18px;
-      line-height: 1;
-      font-weight: 700;
-      padding: 0;
-      touch-action: none;
-      user-select: none;
-      min-width: 36px;
-      min-height: 36px;
-    }
-    .dpad-btn:active {
-      background: rgba(43, 255, 184, 0.3);
-      border-color: #2bffb8;
-    }
-    .dpad-spacer {
-      width: 36px;
-      height: 36px;
     }
     .joystick-knob {
       width: 52px;
@@ -317,8 +429,37 @@
       touch-action: none;
       user-select: none;
     }
-    @media (max-width: 880px) {
-      .app { grid-template-columns: 1fr; }
+    @media (max-width: 980px) {
+      .landing-grid { grid-template-columns: 1fr; }
+      body.in-match .app { grid-template-columns: 1fr; }
+    }
+    @media (min-width: 1024px) {
+      body.in-match .app { grid-template-columns: 280px 1fr; }
+      body.in-match .landing-only { display: none !important; }
+      body.in-match .match-topbar { display: flex; }
+      body.in-match #scoreboardBlock,
+      body.in-match #postMatchActions {
+        display: none !important;
+      }
+      body.in-match .landing-grid {
+        grid-template-columns: 1fr;
+        height: 100%;
+      }
+      body.in-match #chatCard {
+        height: 100%;
+        grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+      }
+      body.in-match #chatTitle { grid-row: 1; }
+      body.in-match #restartPrompt { grid-row: 2; margin-top: 0; }
+      body.in-match #chatList { grid-row: 3; min-height: 0; overflow: auto; }
+      body.in-match #chatComposer { grid-row: 4; align-self: end; }
+      body.in-match .match-chat-actions { grid-row: 5; margin: 0; }
+      body.in-match #gamePanel canvas {
+        width: 100%;
+        height: 100%;
+        aspect-ratio: auto;
+        min-height: 0;
+      }
     }
     @media (hover: none), (pointer: coarse), (max-width: 900px) {
       body { padding-bottom: 150px; }
@@ -329,49 +470,74 @@
 <body>
   <div class="app">
     <section class="panel">
-      <h1 class="title">1v1 Web Arena</h1>
-      <p class="sub">WASD move, mouse aim, click shoot. Host on one PC, join from another.</p>
+      <h1 class="title landing-only">1v1 Web Arena</h1>
+      <p class="sub landing-only">Choose mode, set your profile, and start quickly.</p>
 
-      <div class="row pregame-only">
-        <button id="hostBtn">Create Room</button>
+      <div class="landing-grid">
+        <section class="landing-card column pregame-only">
+          <p class="landing-title">Start</p>
+          <button id="homeStartBtn" class="start-hero">Start</button>
+          <div class="mode-grid">
+            <button id="mode1v1Btn" class="secondary mode-btn active-mode">1v1</button>
+            <button id="mode2v2Btn" class="secondary mode-btn">2v2</button>
+            <button id="modeRoomBtn" class="secondary mode-btn">Room</button>
+            <button id="modeSettingsBtn" class="secondary mode-btn">Settings</button>
+          </div>
+          <button id="quickMatchBtn">Start Match</button>
+          <button id="cancelQuickBtn" class="secondary">Cancel Search</button>
+          <button id="hostBtn">Create Room</button>
+          <input id="roomInput" maxlength="8" placeholder="ROOM CODE" />
+          <button id="joinBtn" class="secondary">Join Room</button>
+        </section>
+
+        <section class="landing-card column pregame-only">
+          <p class="landing-title">Settings</p>
+          <div class="row">
+            <input id="nameInput" class="normal-case" maxlength="16" placeholder="Your Name" />
+            <button id="setNameBtn" class="secondary">Set</button>
+          </div>
+          <div class="row">
+            <input id="scoreLimitInput" type="number" min="1" max="50" value="5" placeholder="SCORE LIMIT" />
+            <button id="setLimitBtn" class="secondary">Set</button>
+          </div>
+          <div class="row">
+            <button id="soundBtn" class="secondary">Sound: On</button>
+            <button id="toggleControlsBtn" class="secondary toggle-off">&#x1F579;&#xFE0F; AUTO</button>
+          </div>
+          <p class="meta" id="roomLabel">Room: -</p>
+          <p class="meta" id="playersLabel">Players: 0/2</p>
+          <p class="meta" id="sidesLabel">Sides: Left - | Right -</p>
+          <p class="meta" id="onlineLabel">Online: 0</p>
+        </section>
+
+        <section id="chatCard" class="landing-card column">
+          <p id="chatTitle" class="landing-title">Global Chat</p>
+          <section id="restartPrompt" class="restart-prompt">
+            <p id="restartPromptText">Opponent requested restart.</p>
+            <div class="row">
+              <button id="restartAcceptBtn">Accept</button>
+              <button id="restartDeclineBtn" class="secondary">Decline</button>
+            </div>
+          </section>
+          <div id="chatList" class="activity chat-stream"></div>
+          <div id="chatComposer">
+            <input id="chatInput" class="normal-case" maxlength="120" placeholder="Type message..." />
+            <button id="chatSendBtn" class="secondary">Send</button>
+          </div>
+          <div class="row match-chat-actions match-only">
+            <button id="restartBtn" class="secondary">Request Restart</button>
+            <button id="quitBtn" class="secondary icon-btn" title="Quit Match">⏻</button>
+          </div>
+          <div class="pregame-only">
+            <p class="landing-title" style="margin-top:6px;">Online Players</p>
+            <div id="onlineList" class="lobby-list"></div>
+            <p class="landing-title" style="margin-top:6px;">Feed</p>
+            <div id="feed" class="feed"></div>
+          </div>
+        </section>
       </div>
 
-      <div class="row pregame-only">
-        <input id="roomInput" maxlength="8" placeholder="ROOM CODE" />
-      </div>
-      <div class="row pregame-only">
-        <button id="joinBtn" class="secondary">Join Room</button>
-      </div>
-
-      <div class="row pregame-only">
-        <input id="scoreLimitInput" type="number" min="1" max="50" value="5" placeholder="SCORE LIMIT" />
-      </div>
-      <div class="row pregame-only">
-        <button id="setLimitBtn" class="secondary">Set Score Limit</button>
-      </div>
-      <div class="row">
-        <button id="restartBtn" class="secondary match-only">Request Restart</button>
-        <button id="quitBtn" class="secondary icon-btn" title="Quit Match">⏻</button>
-      </div>
-      <div class="row">
-        <button id="soundBtn" class="secondary">Sound: On</button>
-        <button id="toggleControlsBtn" class="secondary toggle-off">&#x1F579;&#xFE0F; AUTO</button>
-      </div>
-      <div class="row pregame-only">
-        <input id="nameInput" class="normal-case" maxlength="16" placeholder="Your Name" />
-      </div>
-      <div class="row pregame-only">
-        <button id="setNameBtn" class="secondary">Set Name</button>
-      </div>
-      <div class="row pregame-only">
-        <button id="quickMatchBtn">Start Match</button>
-        <button id="cancelQuickBtn" class="secondary">Cancel</button>
-      </div>
-
-      <p class="meta" id="roomLabel">Room: -</p>
-      <p class="meta" id="playersLabel">Players: 0/2</p>
-      <p class="meta pregame-only" id="onlineLabel">Online: 0</p>
-      <section class="scoreboard">
+      <section id="scoreboardBlock" class="scoreboard match-only">
         <p class="scoreboard-title">Scoreboard</p>
         <p id="scoreMain" class="scoreboard-main">Me 0 - 0 Enemy</p>
         <p id="scoreSub" class="scoreboard-sub">First to 5</p>
@@ -380,22 +546,6 @@
         <button id="continueBtn" class="secondary">Continue</button>
         <button id="restartMatchBtn">Restart</button>
       </div>
-      <section class="lobby-box pregame-only">
-        <p class="lobby-title">Online Players</p>
-        <div id="onlineList" class="lobby-list"></div>
-      </section>
-      <section class="lobby-box pregame-only">
-        <p class="lobby-title">Feed</p>
-        <div id="feed" class="feed"></div>
-      </section>
-      <section class="lobby-box">
-        <p id="chatTitle" class="lobby-title">Global Chat</p>
-        <div id="chatList" class="activity"></div>
-        <div class="row" style="margin-top:8px;">
-          <input id="chatInput" class="normal-case" maxlength="120" placeholder="Type message..." />
-          <button id="chatSendBtn" class="secondary">Send</button>
-        </div>
-      </section>
       <section id="challengePrompt" class="challenge-prompt">
         <p id="challengePromptText">Player challenged you.</p>
         <div class="row">
@@ -403,36 +553,26 @@
           <button id="challengeDeclineBtn" class="secondary">Decline</button>
         </div>
       </section>
-      <section id="restartPrompt" class="restart-prompt">
-        <p id="restartPromptText">Opponent requested restart.</p>
-        <div class="row">
-          <button id="restartAcceptBtn">Accept</button>
-          <button id="restartDeclineBtn" class="secondary">Decline</button>
-        </div>
-      </section>
       <p id="status" class="status">Connect and create/join a room.</p>
     </section>
 
-    <section class="panel">
+    <section id="gamePanel" class="panel">
+      <div id="matchTopbar" class="match-topbar">
+        <div id="topLeftName" class="top-left">Team 1</div>
+        <div class="top-center">
+          <div id="topTime" class="top-time">00:00</div>
+          <div id="topScore" class="top-score">0 - 0</div>
+        </div>
+        <div style="flex:1;">
+          <div id="topRightName" class="top-right">Team 2</div>
+        </div>
+      </div>
       <canvas id="gameCanvas" width="1000" height="600"></canvas>
     </section>
   </div>
   <div id="mobileControls" class="mobile-controls">
-    <div class="move-stack">
-      <div id="joystickBase" class="joystick-base">
-        <div id="joystickKnob" class="joystick-knob"></div>
-      </div>
-      <div id="dpad" class="dpad">
-        <div class="dpad-spacer"></div>
-        <button id="upBtn" class="dpad-btn" aria-label="Move Up">▲</button>
-        <div class="dpad-spacer"></div>
-        <button id="leftBtn" class="dpad-btn" aria-label="Move Left">◀</button>
-        <div class="dpad-spacer"></div>
-        <button id="rightBtn" class="dpad-btn" aria-label="Move Right">▶</button>
-        <div class="dpad-spacer"></div>
-        <button id="downBtn" class="dpad-btn" aria-label="Move Down">▼</button>
-        <div class="dpad-spacer"></div>
-      </div>
+    <div id="joystickBase" class="joystick-base">
+      <div id="joystickKnob" class="joystick-knob"></div>
     </div>
     <div class="action-stack">
       <button id="reloadBtn" class="reload-btn">RELOAD</button>
