@@ -105,6 +105,69 @@
     }
     .status { margin-top: 8px; font-size: 13px; min-height: 18px; color: var(--accent); }
     .error { color: var(--danger); }
+    .lobby-box {
+      margin-top: 10px;
+      padding: 10px;
+      border: 1px solid #35506f;
+      border-radius: 10px;
+      background: #101929;
+    }
+    .lobby-title {
+      margin: 0 0 8px;
+      color: #9eb8d8;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-weight: 700;
+    }
+    .lobby-list {
+      max-height: 120px;
+      overflow: auto;
+      display: grid;
+      gap: 6px;
+    }
+    .lobby-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      border: 1px solid #2d4260;
+      border-radius: 8px;
+      background: #0d1624;
+      font-size: 13px;
+    }
+    .mini-btn {
+      padding: 6px 8px;
+      border-radius: 6px;
+      font-size: 12px;
+    }
+    .feed {
+      margin-top: 10px;
+      max-height: 88px;
+      overflow: auto;
+      font-size: 12px;
+      color: #b9c9de;
+      line-height: 1.35;
+    }
+    .feed p { margin: 0 0 5px; }
+    .activity {
+      margin-top: 10px;
+      max-height: 140px;
+      overflow: auto;
+      font-size: 12px;
+      color: #dbe7f8;
+      line-height: 1.35;
+    }
+    .activity p { margin: 0 0 6px; }
+    .activity .time {
+      color: #8fb1d8;
+      margin-right: 6px;
+    }
+    .activity .name {
+      color: #ffd27f;
+      margin-right: 6px;
+    }
     canvas {
       width: 100%;
       aspect-ratio: 5 / 3;
@@ -194,13 +257,39 @@
       <div class="row">
         <button id="restartBtn" class="secondary">Request Restart</button>
       </div>
+      <div class="row">
+        <button id="soundBtn" class="secondary">Sound: On</button>
+      </div>
+      <div class="row">
+        <input id="nameInput" maxlength="16" placeholder="YOUR NAME" />
+      </div>
+      <div class="row">
+        <button id="setNameBtn" class="secondary">Set Name</button>
+      </div>
+      <div class="row">
+        <button id="quickMatchBtn">Start Match</button>
+        <button id="cancelQuickBtn" class="secondary">Cancel</button>
+      </div>
 
       <p class="meta" id="roomLabel">Room: -</p>
       <p class="meta" id="playersLabel">Players: 0/2</p>
+      <p class="meta" id="onlineLabel">Online: 0</p>
       <section class="scoreboard">
         <p class="scoreboard-title">Scoreboard</p>
         <p id="scoreMain" class="scoreboard-main">Me 0 - 0 Enemy</p>
         <p id="scoreSub" class="scoreboard-sub">First to 5</p>
+      </section>
+      <section class="lobby-box">
+        <p class="lobby-title">Online Players</p>
+        <div id="onlineList" class="lobby-list"></div>
+      </section>
+      <section class="lobby-box">
+        <p class="lobby-title">Feed</p>
+        <div id="feed" class="feed"></div>
+      </section>
+      <section class="lobby-box">
+        <p class="lobby-title">Activity Log</p>
+        <div id="activityList" class="activity"></div>
       </section>
       <section id="restartPrompt" class="restart-prompt">
         <p id="restartPromptText">Opponent requested restart.</p>
