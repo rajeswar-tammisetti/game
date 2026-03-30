@@ -17,6 +17,10 @@ const restartPrompt = document.getElementById("restartPrompt");
 const restartPromptText = document.getElementById("restartPromptText");
 const restartAcceptBtn = document.getElementById("restartAcceptBtn");
 const restartDeclineBtn = document.getElementById("restartDeclineBtn");
+const mobileControls = document.getElementById("mobileControls");
+const joystickBase = document.getElementById("joystickBase");
+const joystickKnob = document.getElementById("joystickKnob");
+const fireBtn = document.getElementById("fireBtn");
 const statusEl = document.getElementById("status");
 
 const input = {
@@ -40,6 +44,13 @@ let matchOver = false;
 let winnerId = null;
 let restartPending = false;
 let restartRequesterId = null;
+const isTouchDevice = window.matchMedia("(hover: none), (pointer: coarse)").matches;
+const joystick = {
+  active: false,
+  pointerId: null,
+  radius: 44
+};
+let fireHoldTimer = null;
 
 function setStatus(text, isError = false) {
   statusEl.textContent = text;
@@ -58,6 +69,45 @@ function updateRestartPrompt() {
 function sendInput() {
   if (!matchReady) return;
   socket.emit("player_input", input);
+}
+
+function setMoveFromJoystick(nx, ny) {
+  input.left = nx < -0.25;
+  input.right = nx > 0.25;
+  input.up = ny < -0.25;
+  input.down = ny > 0.25;
+}
+
+function updateAimFromClientPos(clientX, clientY) {
+  const r = canvas.getBoundingClientRect();
+  const sx = (clientX - r.left) / r.width;
+  const sy = (clientY - r.top) / r.height;
+  input.aimX = clamp(sx * canvas.width, 0, canvas.width);
+  input.aimY = clamp(sy * canvas.height, 0, canvas.height);
+}
+
+function resetJoystick() {
+  joystick.active = false;
+  joystick.pointerId = null;
+  joystickKnob.style.transform = "translate(0px, 0px)";
+  setMoveFromJoystick(0, 0);
+}
+
+function updateJoystick(clientX, clientY) {
+  const rect = joystickBase.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+
+  let dx = clientX - cx;
+  let dy = clientY - cy;
+  const dist = Math.hypot(dx, dy) || 1;
+  if (dist > joystick.radius) {
+    dx = (dx / dist) * joystick.radius;
+    dy = (dy / dist) * joystick.radius;
+  }
+
+  joystickKnob.style.transform = `translate(${dx}px, ${dy}px)`;
+  setMoveFromJoystick(dx / joystick.radius, dy / joystick.radius);
 }
 
 function updateScoreLabel() {
@@ -131,11 +181,7 @@ window.addEventListener("keyup", (e) => {
 });
 
 canvas.addEventListener("mousemove", (e) => {
-  const r = canvas.getBoundingClientRect();
-  const sx = (e.clientX - r.left) / r.width;
-  const sy = (e.clientY - r.top) / r.height;
-  input.aimX = clamp(sx * canvas.width, 0, canvas.width);
-  input.aimY = clamp(sy * canvas.height, 0, canvas.height);
+  updateAimFromClientPos(e.clientX, e.clientY);
 });
 
 function tryShoot() {
@@ -161,6 +207,65 @@ window.addEventListener("keydown", (e) => {
     tryShoot();
   }
 });
+
+if (!isTouchDevice) {
+  mobileControls.style.display = "none";
+} else {
+  joystickBase.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    joystick.active = true;
+    joystick.pointerId = e.pointerId;
+    joystickBase.setPointerCapture(e.pointerId);
+    updateJoystick(e.clientX, e.clientY);
+  });
+
+  joystickBase.addEventListener("pointermove", (e) => {
+    if (!joystick.active || e.pointerId !== joystick.pointerId) return;
+    e.preventDefault();
+    updateJoystick(e.clientX, e.clientY);
+  });
+
+  const endJoystick = (e) => {
+    if (!joystick.active || e.pointerId !== joystick.pointerId) return;
+    e.preventDefault();
+    resetJoystick();
+  };
+
+  joystickBase.addEventListener("pointerup", endJoystick);
+  joystickBase.addEventListener("pointercancel", endJoystick);
+  joystickBase.addEventListener("lostpointercapture", resetJoystick);
+
+  const startFire = (e) => {
+    e.preventDefault();
+    tryShoot();
+    if (fireHoldTimer) clearInterval(fireHoldTimer);
+    fireHoldTimer = setInterval(tryShoot, 170);
+  };
+
+  const endFire = (e) => {
+    e.preventDefault();
+    if (!fireHoldTimer) return;
+    clearInterval(fireHoldTimer);
+    fireHoldTimer = null;
+  };
+
+  fireBtn.addEventListener("pointerdown", startFire);
+  fireBtn.addEventListener("pointerup", endFire);
+  fireBtn.addEventListener("pointercancel", endFire);
+  fireBtn.addEventListener("pointerleave", endFire);
+
+  canvas.addEventListener("touchstart", (e) => {
+    e.preventDefault();
+    const t = e.touches[0];
+    if (t) updateAimFromClientPos(t.clientX, t.clientY);
+  }, { passive: false });
+
+  canvas.addEventListener("touchmove", (e) => {
+    e.preventDefault();
+    const t = e.touches[0];
+    if (t) updateAimFromClientPos(t.clientX, t.clientY);
+  }, { passive: false });
+}
 
 socket.on("connect", () => {
   setStatus("Connected. Create or join a room.");

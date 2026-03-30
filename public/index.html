@@ -112,9 +112,59 @@
       border: 1px solid var(--line);
       background: #0e1218;
       display: block;
+      touch-action: none;
+    }
+    .mobile-controls {
+      display: none;
+      position: fixed;
+      inset: auto 0 14px 0;
+      padding: 0 14px;
+      justify-content: space-between;
+      align-items: flex-end;
+      pointer-events: none;
+      z-index: 30;
+    }
+    .joystick-base {
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      border: 2px solid rgba(255, 255, 255, 0.28);
+      background: rgba(10, 15, 22, 0.45);
+      position: relative;
+      pointer-events: auto;
+      touch-action: none;
+      backdrop-filter: blur(2px);
+    }
+    .joystick-knob {
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      background: rgba(240, 248, 255, 0.7);
+      position: absolute;
+      left: 34px;
+      top: 34px;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+    }
+    .fire-btn {
+      width: 104px;
+      height: 104px;
+      border-radius: 50%;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      background: rgba(228, 88, 88, 0.35);
+      color: #fff;
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      pointer-events: auto;
+      touch-action: none;
+      user-select: none;
     }
     @media (max-width: 880px) {
       .app { grid-template-columns: 1fr; }
+    }
+    @media (hover: none), (pointer: coarse) {
+      body { padding-bottom: 150px; }
+      .mobile-controls { display: flex; }
     }
   </style>
 </head>
@@ -165,6 +215,12 @@
     <section class="panel">
       <canvas id="gameCanvas" width="1000" height="600"></canvas>
     </section>
+  </div>
+  <div id="mobileControls" class="mobile-controls">
+    <div id="joystickBase" class="joystick-base">
+      <div id="joystickKnob" class="joystick-knob"></div>
+    </div>
+    <button id="fireBtn" class="fire-btn">FIRE</button>
   </div>
 
   <script src="/socket.io/socket.io.js"></script>
