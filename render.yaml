@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: web-1v1-arena
+    env: node
+    plan: free
+    region: singapore
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeploy: true

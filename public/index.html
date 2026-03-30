@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Web 1v1 Arena</title>
+  <style>
+    :root {
+      --bg: #10141a;
+      --panel: #1b2430;
+      --line: #2f3e54;
+      --text: #e8edf5;
+      --muted: #9fb0c8;
+      --accent: #2cc8a3;
+      --danger: #e45858;
+      --p1: #4f8cff;
+      --p2: #ff5a70;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      background: radial-gradient(circle at 20% 20%, #1b2736 0, var(--bg) 60%);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    .app {
+      width: min(1060px, 100%);
+      display: grid;
+      gap: 12px;
+      grid-template-columns: 260px 1fr;
+    }
+    .panel {
+      background: color-mix(in oklab, var(--panel), black 10%);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px;
+    }
+    .title { margin: 0 0 8px; font-size: 18px; font-weight: 700; }
+    .sub { margin: 0 0 12px; color: var(--muted); font-size: 13px; line-height: 1.35; }
+    .row { display: flex; gap: 8px; margin-bottom: 8px; }
+    button, input {
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #0f1622;
+      color: var(--text);
+      padding: 10px;
+      font-size: 14px;
+    }
+    input { width: 100%; text-transform: uppercase; }
+    button {
+      cursor: pointer;
+      background: color-mix(in oklab, var(--accent), black 65%);
+      border-color: color-mix(in oklab, var(--accent), black 40%);
+      font-weight: 600;
+    }
+    button.secondary {
+      background: #162334;
+      border-color: #2b3f57;
+    }
+    .meta { font-size: 13px; color: var(--muted); line-height: 1.5; }
+    .scoreboard {
+      margin-top: 10px;
+      padding: 10px;
+      border: 1px solid #35506f;
+      border-radius: 10px;
+      background: #111a27;
+    }
+    .scoreboard-title {
+      margin: 0 0 6px;
+      font-size: 12px;
+      color: #8ea6c3;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+    .scoreboard-main {
+      margin: 0;
+      font-size: 26px;
+      font-weight: 800;
+      color: #edf4ff;
+      line-height: 1.2;
+    }
+    .scoreboard-sub {
+      margin: 6px 0 0;
+      font-size: 13px;
+      color: #9fb0c8;
+    }
+    .restart-prompt {
+      margin-top: 10px;
+      padding: 10px;
+      border: 1px solid #516a8a;
+      border-radius: 10px;
+      background: #162133;
+      display: none;
+    }
+    .restart-prompt p {
+      margin: 0 0 8px;
+      font-size: 13px;
+      color: #d8e6ff;
+    }
+    .status { margin-top: 8px; font-size: 13px; min-height: 18px; color: var(--accent); }
+    .error { color: var(--danger); }
+    canvas {
+      width: 100%;
+      aspect-ratio: 5 / 3;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: #0e1218;
+      display: block;
+    }
+    @media (max-width: 880px) {
+      .app { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <section class="panel">
+      <h1 class="title">1v1 Web Arena</h1>
+      <p class="sub">WASD move, mouse aim, click shoot. Host on one PC, join from another.</p>
+
+      <div class="row">
+        <button id="hostBtn">Create Room</button>
+      </div>
+
+      <div class="row">
+        <input id="roomInput" maxlength="8" placeholder="ROOM CODE" />
+      </div>
+      <div class="row">
+        <button id="joinBtn" class="secondary">Join Room</button>
+      </div>
+
+      <div class="row">
+        <input id="scoreLimitInput" type="number" min="1" max="50" value="5" placeholder="SCORE LIMIT" />
+      </div>
+      <div class="row">
+        <button id="setLimitBtn" class="secondary">Set Score Limit</button>
+      </div>
+      <div class="row">
+        <button id="restartBtn" class="secondary">Request Restart</button>
+      </div>
+
+      <p class="meta" id="roomLabel">Room: -</p>
+      <p class="meta" id="playersLabel">Players: 0/2</p>
+      <section class="scoreboard">
+        <p class="scoreboard-title">Scoreboard</p>
+        <p id="scoreMain" class="scoreboard-main">Me 0 - 0 Enemy</p>
+        <p id="scoreSub" class="scoreboard-sub">First to 5</p>
+      </section>
+      <section id="restartPrompt" class="restart-prompt">
+        <p id="restartPromptText">Opponent requested restart.</p>
+        <div class="row">
+          <button id="restartAcceptBtn">Accept</button>
+          <button id="restartDeclineBtn" class="secondary">Decline</button>
+        </div>
+      </section>
+      <p id="status" class="status">Connect and create/join a room.</p>
+    </section>
+
+    <section class="panel">
+      <canvas id="gameCanvas" width="1000" height="600"></canvas>
+    </section>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/client.js"></script>
+</body>
+</html>
