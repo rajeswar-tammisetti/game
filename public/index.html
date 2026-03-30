@@ -204,6 +204,9 @@
     body:not(.in-match) .match-only {
       display: none !important;
     }
+    body:not(.match-over) .match-over-only {
+      display: none !important;
+    }
     canvas {
       width: 100%;
       aspect-ratio: 5 / 3;
@@ -233,6 +236,42 @@
       pointer-events: auto;
       touch-action: none;
       backdrop-filter: blur(2px);
+    }
+    .move-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      align-items: center;
+      pointer-events: auto;
+    }
+    .dpad {
+      display: grid;
+      grid-template-columns: repeat(3, 36px);
+      grid-template-rows: repeat(3, 36px);
+      gap: 4px;
+      pointer-events: auto;
+    }
+    .dpad-btn {
+      border: 1px solid rgba(255, 255, 255, 0.28);
+      background: rgba(20, 31, 45, 0.85);
+      color: #dff0ff;
+      border-radius: 8px;
+      font-size: 18px;
+      line-height: 1;
+      font-weight: 700;
+      padding: 0;
+      touch-action: none;
+      user-select: none;
+      min-width: 36px;
+      min-height: 36px;
+    }
+    .dpad-btn:active {
+      background: rgba(43, 255, 184, 0.3);
+      border-color: #2bffb8;
+    }
+    .dpad-spacer {
+      width: 36px;
+      height: 36px;
     }
     .joystick-knob {
       width: 52px;
@@ -337,6 +376,10 @@
         <p id="scoreMain" class="scoreboard-main">Me 0 - 0 Enemy</p>
         <p id="scoreSub" class="scoreboard-sub">First to 5</p>
       </section>
+      <div id="postMatchActions" class="row match-over-only" style="margin-top:10px;">
+        <button id="continueBtn" class="secondary">Continue</button>
+        <button id="restartMatchBtn">Restart</button>
+      </div>
       <section class="lobby-box pregame-only">
         <p class="lobby-title">Online Players</p>
         <div id="onlineList" class="lobby-list"></div>
@@ -375,8 +418,21 @@
     </section>
   </div>
   <div id="mobileControls" class="mobile-controls">
-    <div id="joystickBase" class="joystick-base">
-      <div id="joystickKnob" class="joystick-knob"></div>
+    <div class="move-stack">
+      <div id="joystickBase" class="joystick-base">
+        <div id="joystickKnob" class="joystick-knob"></div>
+      </div>
+      <div id="dpad" class="dpad">
+        <div class="dpad-spacer"></div>
+        <button id="upBtn" class="dpad-btn" aria-label="Move Up">▲</button>
+        <div class="dpad-spacer"></div>
+        <button id="leftBtn" class="dpad-btn" aria-label="Move Left">◀</button>
+        <div class="dpad-spacer"></div>
+        <button id="rightBtn" class="dpad-btn" aria-label="Move Right">▶</button>
+        <div class="dpad-spacer"></div>
+        <button id="downBtn" class="dpad-btn" aria-label="Move Down">▼</button>
+        <div class="dpad-spacer"></div>
+      </div>
     </div>
     <div class="action-stack">
       <button id="reloadBtn" class="reload-btn">RELOAD</button>

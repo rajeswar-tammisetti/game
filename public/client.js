@@ -7,6 +7,8 @@ const hostBtn = document.getElementById("hostBtn");
 const joinBtn = document.getElementById("joinBtn");
 const setLimitBtn = document.getElementById("setLimitBtn");
 const restartBtn = document.getElementById("restartBtn");
+const continueBtn = document.getElementById("continueBtn");
+const restartMatchBtn = document.getElementById("restartMatchBtn");
 const quitBtn = document.getElementById("quitBtn");
 const soundBtn = document.getElementById("soundBtn");
 const toggleControlsBtn = document.getElementById("toggleControlsBtn");
@@ -43,6 +45,10 @@ const challengeDeclineBtn = document.getElementById("challengeDeclineBtn");
 const mobileControls = document.getElementById("mobileControls");
 const joystickBase = document.getElementById("joystickBase");
 const joystickKnob = document.getElementById("joystickKnob");
+const upBtn = document.getElementById("upBtn");
+const downBtn = document.getElementById("downBtn");
+const leftBtn = document.getElementById("leftBtn");
+const rightBtn = document.getElementById("rightBtn");
 const fireBtn = document.getElementById("fireBtn");
 const reloadBtn = document.getElementById("reloadBtn");
 
@@ -102,6 +108,7 @@ const joystick = {
 let fireHoldTimer = null;
 let audioCtx = null;
 let mouseFireHeld = false;
+const dpadPressCount = { up: 0, down: 0, left: 0, right: 0 };
 
 function ensureAudio() {
   if (!audioCtx) {
@@ -266,6 +273,10 @@ function setInMatchUI(inMatch) {
   document.body.classList.toggle("in-match", !!inMatch);
 }
 
+function setMatchOverUI(isOver) {
+  document.body.classList.toggle("match-over", !!isOver);
+}
+
 function updateChatModeLabel() {
   if (!chatTitleEl) return;
   chatTitleEl.textContent = roomCode ? "Room Chat" : "Global Chat";
@@ -277,10 +288,26 @@ function sendInput() {
 }
 
 function setMoveFromJoystick(nx, ny) {
-  input.left = nx < -0.25;
-  input.right = nx > 0.25;
-  input.up = ny < -0.25;
-  input.down = ny > 0.25;
+  const joyLeft = nx < -0.25;
+  const joyRight = nx > 0.25;
+  const joyUp = ny < -0.25;
+  const joyDown = ny > 0.25;
+  input.left = joyLeft || dpadPressCount.left > 0;
+  input.right = joyRight || dpadPressCount.right > 0;
+  input.up = joyUp || dpadPressCount.up > 0;
+  input.down = joyDown || dpadPressCount.down > 0;
+}
+
+function refreshMoveInputFromButtons() {
+  const hasJoy = joystick.active;
+  const joyTransform = hasJoy ? joystickKnob.style.transform : "";
+  if (hasJoy && joyTransform && joyTransform !== "translate(0px, 0px)") {
+    return;
+  }
+  input.left = dpadPressCount.left > 0;
+  input.right = dpadPressCount.right > 0;
+  input.up = dpadPressCount.up > 0;
+  input.down = dpadPressCount.down > 0;
 }
 
 function updateAimFromClientPos(clientX, clientY) {
@@ -384,6 +411,8 @@ setLimitBtn.onclick = () => {
 };
 
 restartBtn.onclick = () => socket.emit("request_restart");
+continueBtn.onclick = () => socket.emit("leave_room");
+restartMatchBtn.onclick = () => socket.emit("request_restart");
 quitBtn.onclick = () => socket.emit("leave_room");
 restartAcceptBtn.onclick = () => socket.emit("respond_restart", { accept: true });
 restartDeclineBtn.onclick = () => socket.emit("respond_restart", { accept: false });
@@ -441,10 +470,10 @@ window.addEventListener("keydown", (e) => {
   if (typing) return;
 
   const k = e.key.toLowerCase();
-  if (k === "w") input.up = true;
-  if (k === "s") input.down = true;
-  if (k === "a") input.left = true;
-  if (k === "d") input.right = true;
+  if (k === "w" || k === "arrowup") input.up = true;
+  if (k === "s" || k === "arrowdown") input.down = true;
+  if (k === "a" || k === "arrowleft") input.left = true;
+  if (k === "d" || k === "arrowright") input.right = true;
   if (e.code === "Space") {
     e.preventDefault();
     tryShoot();
@@ -457,10 +486,10 @@ window.addEventListener("keydown", (e) => {
 
 window.addEventListener("keyup", (e) => {
   const k = e.key.toLowerCase();
-  if (k === "w") input.up = false;
-  if (k === "s") input.down = false;
-  if (k === "a") input.left = false;
-  if (k === "d") input.right = false;
+  if (k === "w" || k === "arrowup") input.up = false;
+  if (k === "s" || k === "arrowdown") input.down = false;
+  if (k === "a" || k === "arrowleft") input.left = false;
+  if (k === "d" || k === "arrowright") input.right = false;
 });
 
 canvas.addEventListener("mousemove", (e) => updateAimFromClientPos(e.clientX, e.clientY));
@@ -508,6 +537,32 @@ joystickBase.addEventListener("pointerup", endJoy);
 joystickBase.addEventListener("pointercancel", endJoy);
 joystickBase.addEventListener("lostpointercapture", resetJoystick);
 
+function bindDpadButton(button, dir) {
+  if (!button) return;
+  const start = (e) => {
+    e.preventDefault();
+    dpadPressCount[dir] += 1;
+    refreshMoveInputFromButtons();
+  };
+  const end = (e) => {
+    e.preventDefault();
+    dpadPressCount[dir] = Math.max(0, dpadPressCount[dir] - 1);
+    refreshMoveInputFromButtons();
+  };
+  button.addEventListener("pointerdown", start);
+  button.addEventListener("pointerup", end);
+  button.addEventListener("pointercancel", end);
+  button.addEventListener("pointerleave", end);
+  button.addEventListener("touchstart", start, { passive: false });
+  button.addEventListener("touchend", end, { passive: false });
+  button.addEventListener("touchcancel", end, { passive: false });
+}
+
+bindDpadButton(upBtn, "up");
+bindDpadButton(downBtn, "down");
+bindDpadButton(leftBtn, "left");
+bindDpadButton(rightBtn, "right");
+
 const startFire = (e) => {
   e.preventDefault();
   tryShoot();
@@ -548,6 +603,7 @@ canvas.addEventListener("touchmove", (e) => {
 
 socket.on("connect", () => {
   setStatus("Connected. Create, join, or quick-start.");
+  setMatchOverUI(false);
   updateChatModeLabel();
   socket.emit("request_chat_init");
   socket.emit("request_lobby_snapshot");
@@ -605,6 +661,7 @@ socket.on("quick_match_error", ({ reason }) => setStatus(reason || "Quick match 
 
 socket.on("match_created", ({ source, roomCode: code }) => {
   quickSearching = false;
+  setMatchOverUI(false);
   challengePrompt.style.display = "none";
   pendingChallengeFromId = null;
   if (code) {
@@ -637,6 +694,7 @@ socket.on("join_failed", ({ reason }) => setStatus(reason || "Failed to join.", 
 socket.on("match_ready", () => {
   matchReady = true;
   matchOver = false;
+  setMatchOverUI(false);
   winnerId = null;
   challengePrompt.style.display = "none";
   pendingChallengeFromId = null;
@@ -666,6 +724,7 @@ socket.on("round_over", ({ winnerId: wid }) => {
 
 socket.on("match_over", ({ winnerId: wid }) => {
   matchOver = true;
+  setMatchOverUI(true);
   winnerId = wid || null;
   setStatus(winnerId === selfId ? "You won the match." : "You lost the match.", winnerId !== selfId);
   playTone(winnerId === selfId ? 990 : 240, 0.2, "sine", 0.06);
@@ -691,6 +750,7 @@ socket.on("restart_error", ({ reason }) => setStatus(reason || "Cannot restart n
 socket.on("match_restarted", () => {
   matchReady = true;
   matchOver = false;
+  setMatchOverUI(false);
   winnerId = null;
   roundLive = false;
   restartPending = false;
@@ -707,6 +767,7 @@ socket.on("match_restarted", () => {
 socket.on("opponent_left", () => {
   matchReady = false;
   roundLive = false;
+  setMatchOverUI(false);
   challengePrompt.style.display = "none";
   pendingChallengeFromId = null;
   roomCode = null;
@@ -720,6 +781,7 @@ socket.on("room_closed", ({ reason }) => {
   matchReady = false;
   roundLive = false;
   matchOver = false;
+  setMatchOverUI(false);
   winnerId = null;
   roomCode = null;
   updateChatModeLabel();
@@ -746,6 +808,7 @@ socket.on("state", (snapshot) => {
   roundLive = !!snapshot.roundLive;
   roundCountdownUntil = snapshot.roundCountdownUntil || 0;
   matchOver = !!snapshot.matchOver;
+  setMatchOverUI(matchOver);
   winnerId = snapshot.winnerId || null;
   restartPending = !!snapshot.restartPending;
   restartRequesterId = snapshot.restartRequesterId || null;
@@ -844,7 +907,8 @@ function drawPickup(now) {
     speed: "#46c6ff",
     heal: "#39ffb8",
     multiplier: "#ffcb45",
-    shield: "#b38cff"
+    shield: "#b38cff",
+    triple: "#ff9f57"
   };
   const color = colorByType[pickup.type] || "#ffffff";
   ctx.strokeStyle = color;
@@ -1052,6 +1116,10 @@ function drawHud(now) {
   }
   if (me.hasMultiplier) {
     ctx.fillText(`DMG x${me.multiplierValue.toFixed(2)}`, 12, effectY);
+    effectY += 22;
+  }
+  if (me.hasTripleShot) {
+    ctx.fillText("TRIPLE SHOT", 12, effectY);
     effectY += 22;
   }
   if (me.isReloading) {

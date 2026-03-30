@@ -38,6 +38,8 @@ const MULTIPLIER_MS = 6000;
 const MULTIPLIER_MIN = 1.25;
 const MULTIPLIER_MAX = 2.0;
 const SHIELD_PICKUP_MS = 1800;
+const TRIPLE_SHOT_MS = 5500;
+const TRIPLE_SPREAD_RAD = 0.16;
 
 const SPAWN_POINTS = [
   { x: 120, y: 120 },
@@ -239,7 +241,7 @@ function createPickup() {
 
 function spawnPickup(room) {
   room.pickup.active = true;
-  const types = ["speed", "heal", "multiplier", "shield"];
+  const types = ["speed", "heal", "multiplier", "shield", "triple"];
   room.pickup.type = types[Math.floor(Math.random() * types.length)];
   room.pickup.x = ARENA.width / 2;
   room.pickup.y = ARENA.height / 2;
@@ -260,6 +262,8 @@ function consumePickup(room, playerId) {
     player.multiplierValue = randomMult;
   } else if (room.pickup.type === "shield") {
     player.spawnShieldUntil = Date.now() + SHIELD_PICKUP_MS;
+  } else if (room.pickup.type === "triple") {
+    player.tripleUntil = Date.now() + TRIPLE_SHOT_MS;
   }
 
   io.to(room.roomCode).emit("pickup_taken", {
@@ -295,7 +299,8 @@ function makePlayer(slot) {
     spawnShieldUntil: Date.now() + RESPAWN_PROTECT_MS,
     speedUntil: 0,
     multiplierUntil: 0,
-    multiplierValue: 1
+    multiplierValue: 1,
+    tripleUntil: 0
   };
 }
 
@@ -316,6 +321,7 @@ function resetPlayerForRound(player, slot) {
   player.speedUntil = 0;
   player.multiplierUntil = 0;
   player.multiplierValue = 1;
+  player.tripleUntil = 0;
   player.input = { up: false, down: false, left: false, right: false, aimX: player.aimX, aimY: player.aimY };
 }
 
@@ -381,6 +387,7 @@ function getRoomStateForClient(room, selfId) {
       hasSpeedBoost: p.speedUntil > now,
       hasMultiplier: p.multiplierUntil > now,
       multiplierValue: p.multiplierUntil > now ? p.multiplierValue : 1,
+      hasTripleShot: p.tripleUntil > now,
       ammo: p.ammo,
       isReloading,
       reloadEndsAt: isReloading ? p.reloadingUntil : 0,
@@ -416,37 +423,10 @@ function beginReload(room, playerId, now = Date.now()) {
   return true;
 }
 
-function resolveShoot(room, shooterId, shotAim) {
-  const now = Date.now();
+function resolveSingleRay(room, shooterId, dirX, dirY, damageOut, now) {
   const shooter = room.players.get(shooterId);
   if (!shooter) return null;
-  if (!room.roundLive) return null;
-  if (room.matchOver) return null;
-  if (shooter.deadUntil > now) return null;
-  // Spawn shield is invincibility + no-shoot window to prevent respawn advantage.
-  if (shooter.spawnShieldUntil > now) return null;
-  if (shooter.reloadingUntil > now) return null;
-  if (shooter.ammo <= 0) {
-    beginReload(room, shooterId, now);
-    return null;
-  }
-  if (now - shooter.lastFireAt < FIRE_COOLDOWN_MS) return null;
-
-  shooter.lastFireAt = now;
-  shooter.ammo = Math.max(0, shooter.ammo - 1);
-
-  if (shotAim && Number.isFinite(shotAim.aimX) && Number.isFinite(shotAim.aimY)) {
-    shooter.aimX = shotAim.aimX;
-    shooter.aimY = shotAim.aimY;
-  }
-
-  const dx = shooter.aimX - shooter.x;
-  const dy = shooter.aimY - shooter.y;
-  const len = Math.hypot(dx, dy) || 1;
-  const dirX = dx / len;
-  const dirY = dy / len;
   const rangeSq = FIRE_RANGE * FIRE_RANGE;
-
   let bestTargetId = null;
   let bestAlong = Number.POSITIVE_INFINITY;
 
@@ -476,7 +456,6 @@ function resolveShoot(room, shooterId, shotAim) {
   let endY = shooter.y + dirY * FIRE_RANGE;
   let killed = false;
   let targetId = null;
-  const damageOut = shooter.multiplierUntil > now ? Math.round(DAMAGE * shooter.multiplierValue) : DAMAGE;
 
   if (bestTargetId) {
     const target = room.players.get(bestTargetId);
@@ -494,12 +473,6 @@ function resolveShoot(room, shooterId, shotAim) {
         shooter.kills += 1;
         shooter.totalKills += 1;
         target.deadUntil = now + RESPAWN_MS;
-
-        io.to(room.roomCode).emit("kill_feed", {
-          killerId: shooterId,
-          victimId: bestTargetId,
-          text: "eliminated"
-        });
       }
     }
   }
@@ -515,6 +488,51 @@ function resolveShoot(room, shooterId, shotAim) {
     killed,
     damage: hit ? damageOut : 0
   };
+}
+
+function resolveShoot(room, shooterId, shotAim) {
+  const now = Date.now();
+  const shooter = room.players.get(shooterId);
+  if (!shooter) return null;
+  if (!room.roundLive) return null;
+  if (room.matchOver) return null;
+  if (shooter.deadUntil > now) return null;
+  // Spawn shield is invincibility + no-shoot window to prevent respawn advantage.
+  if (shooter.spawnShieldUntil > now) return null;
+  if (shooter.reloadingUntil > now) return null;
+  if (shooter.ammo <= 0) {
+    beginReload(room, shooterId, now);
+    return null;
+  }
+  if (now - shooter.lastFireAt < FIRE_COOLDOWN_MS) return null;
+
+  shooter.lastFireAt = now;
+  shooter.ammo = Math.max(0, shooter.ammo - 1);
+
+  if (shotAim && Number.isFinite(shotAim.aimX) && Number.isFinite(shotAim.aimY)) {
+    shooter.aimX = shotAim.aimX;
+    shooter.aimY = shotAim.aimY;
+  }
+
+  const dx = shooter.aimX - shooter.x;
+  const dy = shooter.aimY - shooter.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const baseDirX = dx / len;
+  const baseDirY = dy / len;
+  const damageOut = shooter.multiplierUntil > now ? Math.round(DAMAGE * shooter.multiplierValue) : DAMAGE;
+  const shotAngles = shooter.tripleUntil > now ? [-TRIPLE_SPREAD_RAD, 0, TRIPLE_SPREAD_RAD] : [0];
+  const shots = [];
+
+  for (const a of shotAngles) {
+    const c = Math.cos(a);
+    const s = Math.sin(a);
+    const dirX = baseDirX * c - baseDirY * s;
+    const dirY = baseDirX * s + baseDirY * c;
+    const shot = resolveSingleRay(room, shooterId, dirX, dirY, damageOut, now);
+    if (shot) shots.push(shot);
+  }
+
+  return shots;
 }
 
 function handleRoundWin(room, winnerId) {
@@ -895,12 +913,17 @@ io.on("connection", (socket) => {
     const room = roomCode ? rooms.get(roomCode) : null;
     if (!room) return;
 
-    const shot = resolveShoot(room, socket.id, shotAim);
-    if (!shot) return;
+    const shots = resolveShoot(room, socket.id, shotAim);
+    if (!shots || shots.length === 0) return;
 
-    io.to(roomCode).emit("shot_fired", shot);
-
-    if (shot.killed) {
+    for (const shot of shots) {
+      io.to(roomCode).emit("shot_fired", shot);
+      if (!shot.killed) continue;
+      io.to(roomCode).emit("kill_feed", {
+        killerId: socket.id,
+        victimId: shot.targetId,
+        text: "eliminated"
+      });
       const shooter = room.players.get(socket.id);
       if (shooter && shooter.kills >= room.scoreLimit) {
         handleRoundWin(room, socket.id);
@@ -1134,6 +1157,7 @@ setInterval(() => {
         player.speedUntil = 0;
         player.multiplierUntil = 0;
         player.multiplierValue = 1;
+        player.tripleUntil = 0;
       }
     }
 
