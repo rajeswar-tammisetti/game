@@ -44,7 +44,10 @@ let matchOver = false;
 let winnerId = null;
 let restartPending = false;
 let restartRequesterId = null;
-const isTouchDevice = window.matchMedia("(hover: none), (pointer: coarse)").matches;
+const isTouchDevice =
+  window.matchMedia("(hover: none), (pointer: coarse), (max-width: 900px)").matches ||
+  ("ontouchstart" in window) ||
+  (navigator.maxTouchPoints > 0);
 const joystick = {
   active: false,
   pointerId: null,
@@ -211,6 +214,7 @@ window.addEventListener("keydown", (e) => {
 if (!isTouchDevice) {
   mobileControls.style.display = "none";
 } else {
+  mobileControls.style.display = "flex";
   joystickBase.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     joystick.active = true;
