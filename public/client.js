@@ -7,7 +7,9 @@ const hostBtn = document.getElementById("hostBtn");
 const joinBtn = document.getElementById("joinBtn");
 const setLimitBtn = document.getElementById("setLimitBtn");
 const restartBtn = document.getElementById("restartBtn");
+const quitBtn = document.getElementById("quitBtn");
 const soundBtn = document.getElementById("soundBtn");
+const toggleControlsBtn = document.getElementById("toggleControlsBtn");
 const setNameBtn = document.getElementById("setNameBtn");
 const quickMatchBtn = document.getElementById("quickMatchBtn");
 const cancelQuickBtn = document.getElementById("cancelQuickBtn");
@@ -22,19 +24,29 @@ const onlineLabel = document.getElementById("onlineLabel");
 const scoreMain = document.getElementById("scoreMain");
 const scoreSub = document.getElementById("scoreSub");
 const statusEl = document.getElementById("status");
+const chatTitleEl = document.getElementById("chatTitle");
 const onlineListEl = document.getElementById("onlineList");
 const feedEl = document.getElementById("feed");
-const activityListEl = document.getElementById("activityList");
+const chatListEl = document.getElementById("chatList");
+const chatInput = document.getElementById("chatInput");
+const chatSendBtn = document.getElementById("chatSendBtn");
 
 const restartPrompt = document.getElementById("restartPrompt");
 const restartPromptText = document.getElementById("restartPromptText");
 const restartAcceptBtn = document.getElementById("restartAcceptBtn");
 const restartDeclineBtn = document.getElementById("restartDeclineBtn");
+const challengePrompt = document.getElementById("challengePrompt");
+const challengePromptText = document.getElementById("challengePromptText");
+const challengeAcceptBtn = document.getElementById("challengeAcceptBtn");
+const challengeDeclineBtn = document.getElementById("challengeDeclineBtn");
 
 const mobileControls = document.getElementById("mobileControls");
 const joystickBase = document.getElementById("joystickBase");
 const joystickKnob = document.getElementById("joystickKnob");
 const fireBtn = document.getElementById("fireBtn");
+const reloadBtn = document.getElementById("reloadBtn");
+
+const CLIP_SIZE = 8;
 
 const input = {
   up: false,
@@ -58,10 +70,11 @@ let matchOver = false;
 let winnerId = null;
 let quickSearching = false;
 let soundEnabled = true;
-let canShoot = true;
 let lastShotAt = 0;
 let restartPending = false;
 let restartRequesterId = null;
+let pendingChallengeFromId = null;
+let controlsForcedVisible = false;
 
 let players = {};
 let pickup = { active: false, type: null, x: 0, y: 0 };
@@ -72,11 +85,12 @@ let queueCount = 0;
 const tracers = [];
 const burstFx = [];
 const floatTexts = [];
-const activityLogs = [];
+const muzzleFx = [];
+const chatMessages = [];
+const recentShotUntil = {};
 
 const isTouchDevice =
-  window.matchMedia("(hover: none), (pointer: coarse), (max-width: 900px)").matches ||
-  ("ontouchstart" in window) ||
+  window.matchMedia("(hover: none) and (pointer: coarse)").matches ||
   (navigator.maxTouchPoints > 0);
 
 const joystick = {
@@ -87,6 +101,7 @@ const joystick = {
 
 let fireHoldTimer = null;
 let audioCtx = null;
+let mouseFireHeld = false;
 
 function ensureAudio() {
   if (!audioCtx) {
@@ -122,6 +137,12 @@ function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
 
+function idPhase(id) {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return Math.abs(h % 1000) / 1000;
+}
+
 function appendFeed(text) {
   const p = document.createElement("p");
   p.textContent = text;
@@ -129,19 +150,57 @@ function appendFeed(text) {
   while (feedEl.children.length > 8) feedEl.removeChild(feedEl.lastChild);
 }
 
-function renderActivityLogs() {
-  activityListEl.innerHTML = "";
-  for (const log of activityLogs.slice(0, 30)) {
+function renderChatMessages() {
+  updateChatModeLabel();
+  chatListEl.innerHTML = "";
+  for (const msg of chatMessages.slice(-40)) {
     const p = document.createElement("p");
-    p.innerHTML = `<span class="time">${log.timeText || ""}</span><span class="name">${log.name || "System"}</span>${log.action || ""}`;
-    activityListEl.appendChild(p);
+    const time = document.createElement("span");
+    time.className = "time";
+    time.textContent = msg.timeText || "--:--:--";
+
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = msg.name || "Player";
+
+    const text = document.createElement("span");
+    text.textContent = msg.text || "";
+
+    p.appendChild(time);
+    p.appendChild(name);
+    p.appendChild(text);
+    chatListEl.appendChild(p);
   }
+  chatListEl.scrollTop = chatListEl.scrollHeight;
 }
 
-function addActivityLog(log) {
-  activityLogs.unshift(log);
-  if (activityLogs.length > 60) activityLogs.pop();
-  renderActivityLogs();
+function addChatMessage(msg) {
+  chatMessages.push(msg);
+  if (chatMessages.length > 80) chatMessages.shift();
+  renderChatMessages();
+}
+
+function hasCustomName() {
+  return !!selfName && selfName.trim().length >= 2;
+}
+
+function requireNameBeforePlay() {
+  if (hasCustomName()) return true;
+  setStatus("Set your name first (minimum 2 characters).", true);
+  nameInput.focus();
+  return false;
+}
+
+function sendChat() {
+  if (!hasCustomName()) {
+    setStatus("Set your name first to chat.", true);
+    nameInput.focus();
+    return;
+  }
+  const text = chatInput.value.trim();
+  if (!text) return;
+  socket.emit("chat_send", { text });
+  chatInput.value = "";
 }
 
 function updateScore() {
@@ -180,7 +239,10 @@ function renderLobby() {
     const btn = document.createElement("button");
     btn.className = "mini-btn secondary";
     btn.textContent = "Challenge";
-    btn.onclick = () => socket.emit("send_challenge", { targetId: p.id });
+    btn.onclick = () => {
+      if (!requireNameBeforePlay()) return;
+      socket.emit("send_challenge", { targetId: p.id });
+    };
     row.appendChild(name);
     row.appendChild(btn);
     onlineListEl.appendChild(row);
@@ -190,6 +252,23 @@ function renderLobby() {
 function updateRestartPrompt() {
   const show = restartPending && restartRequesterId && restartRequesterId !== selfId;
   restartPrompt.style.display = show ? "block" : "none";
+}
+
+function applyControlsVisibility() {
+  const show = controlsForcedVisible || isTouchDevice;
+  mobileControls.style.display = show ? "flex" : "none";
+  toggleControlsBtn.textContent = controlsForcedVisible ? "🕹 ON" : "🕹 AUTO";
+  toggleControlsBtn.classList.toggle("toggle-on", controlsForcedVisible);
+  toggleControlsBtn.classList.toggle("toggle-off", !controlsForcedVisible);
+}
+
+function setInMatchUI(inMatch) {
+  document.body.classList.toggle("in-match", !!inMatch);
+}
+
+function updateChatModeLabel() {
+  if (!chatTitleEl) return;
+  chatTitleEl.textContent = roomCode ? "Room Chat" : "Global Chat";
 }
 
 function sendInput() {
@@ -253,25 +332,41 @@ function applyTouchAimAssist() {
   }
 }
 
+function tryReload() {
+  if (!matchReady || !roundLive || matchOver || !selfId || !players[selfId]) return;
+  const me = players[selfId];
+  if (me.isDead || me.isReloading) return;
+  if ((me.ammo || 0) >= CLIP_SIZE) return;
+  socket.emit("reload");
+  playTone(300, 0.07, "sawtooth", 0.025);
+}
+
 function tryShoot() {
   if (!matchReady || !roundLive || matchOver) return;
-  if (selfId && players[selfId] && players[selfId].isShielded) return;
-  if (!canShoot) return;
+  if (selfId && players[selfId]) {
+    const me = players[selfId];
+    if (me.isShielded) return;
+    if (me.isDead || me.isReloading) return;
+    if ((me.ammo || 0) <= 0) {
+      tryReload();
+      return;
+    }
+  }
 
   applyTouchAimAssist();
-  canShoot = false;
   lastShotAt = Date.now();
   socket.emit("shoot", { aimX: input.aimX, aimY: input.aimY });
   playTone(650, 0.05, "square", 0.03);
-  setTimeout(() => { canShoot = true; }, 120);
 }
 
 hostBtn.onclick = () => {
+  if (!requireNameBeforePlay()) return;
   socket.emit("create_room");
   setStatus("Creating room...");
 };
 
 joinBtn.onclick = () => {
+  if (!requireNameBeforePlay()) return;
   const code = roomInput.value.trim().toUpperCase();
   if (!code) {
     setStatus("Enter room code first.", true);
@@ -289,21 +384,51 @@ setLimitBtn.onclick = () => {
 };
 
 restartBtn.onclick = () => socket.emit("request_restart");
+quitBtn.onclick = () => socket.emit("leave_room");
 restartAcceptBtn.onclick = () => socket.emit("respond_restart", { accept: true });
 restartDeclineBtn.onclick = () => socket.emit("respond_restart", { accept: false });
+challengeAcceptBtn.onclick = () => {
+  if (!pendingChallengeFromId) return;
+  socket.emit("respond_challenge", { fromId: pendingChallengeFromId, accept: true });
+  pendingChallengeFromId = null;
+  challengePrompt.style.display = "none";
+};
+challengeDeclineBtn.onclick = () => {
+  if (!pendingChallengeFromId) return;
+  socket.emit("respond_challenge", { fromId: pendingChallengeFromId, accept: false });
+  pendingChallengeFromId = null;
+  challengePrompt.style.display = "none";
+};
 
 setNameBtn.onclick = () => {
   const n = nameInput.value.trim();
-  if (!n) return;
+  if (n.length < 2) {
+    setStatus("Name must be at least 2 characters.", true);
+    return;
+  }
   socket.emit("set_name", { name: n });
 };
 
-quickMatchBtn.onclick = () => socket.emit("request_quick_match");
+quickMatchBtn.onclick = () => {
+  if (!requireNameBeforePlay()) return;
+  socket.emit("request_quick_match");
+};
 cancelQuickBtn.onclick = () => socket.emit("cancel_quick_match");
+chatSendBtn.onclick = sendChat;
+chatInput.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  sendChat();
+});
 
 soundBtn.onclick = () => {
   soundEnabled = !soundEnabled;
   soundBtn.textContent = `Sound: ${soundEnabled ? "On" : "Off"}`;
+};
+
+toggleControlsBtn.onclick = () => {
+  controlsForcedVisible = !controlsForcedVisible;
+  applyControlsVisibility();
 };
 
 window.addEventListener("keydown", (e) => {
@@ -316,6 +441,10 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     tryShoot();
   }
+  if (k === "r") {
+    e.preventDefault();
+    tryReload();
+  }
 });
 
 window.addEventListener("keyup", (e) => {
@@ -327,81 +456,116 @@ window.addEventListener("keyup", (e) => {
 });
 
 canvas.addEventListener("mousemove", (e) => updateAimFromClientPos(e.clientX, e.clientY));
-canvas.addEventListener("mousedown", () => tryShoot());
+window.addEventListener("mousemove", (e) => updateAimFromClientPos(e.clientX, e.clientY));
 
-if (!isTouchDevice) {
-  mobileControls.style.display = "none";
-} else {
-  mobileControls.style.display = "flex";
-
-  joystickBase.addEventListener("pointerdown", (e) => {
-    e.preventDefault();
-    joystick.active = true;
-    joystick.pointerId = e.pointerId;
-    joystickBase.setPointerCapture(e.pointerId);
-    updateJoystick(e.clientX, e.clientY);
-  });
-  joystickBase.addEventListener("pointermove", (e) => {
-    if (!joystick.active || e.pointerId !== joystick.pointerId) return;
-    e.preventDefault();
-    updateJoystick(e.clientX, e.clientY);
-  });
-
-  const endJoy = (e) => {
-    if (!joystick.active || e.pointerId !== joystick.pointerId) return;
-    e.preventDefault();
-    resetJoystick();
-  };
-  joystickBase.addEventListener("pointerup", endJoy);
-  joystickBase.addEventListener("pointercancel", endJoy);
-  joystickBase.addEventListener("lostpointercapture", resetJoystick);
-
-  const startFire = (e) => {
-    e.preventDefault();
+canvas.addEventListener("mousedown", (e) => {
+  if (e.button !== 0) return;
+  mouseFireHeld = true;
+  tryShoot();
+  if (fireHoldTimer) clearInterval(fireHoldTimer);
+  fireHoldTimer = setInterval(() => {
+    if (!mouseFireHeld) return;
     tryShoot();
-    if (fireHoldTimer) clearInterval(fireHoldTimer);
-    fireHoldTimer = setInterval(tryShoot, 170);
-  };
-  const endFire = (e) => {
-    e.preventDefault();
-    if (!fireHoldTimer) return;
-    clearInterval(fireHoldTimer);
-    fireHoldTimer = null;
-  };
-
-  fireBtn.addEventListener("pointerdown", startFire);
-  fireBtn.addEventListener("pointerup", endFire);
-  fireBtn.addEventListener("pointercancel", endFire);
-  fireBtn.addEventListener("pointerleave", endFire);
-
-  canvas.addEventListener("touchstart", (e) => {
-    e.preventDefault();
-    const t = e.touches[0];
-    if (t) updateAimFromClientPos(t.clientX, t.clientY);
-  }, { passive: false });
-  canvas.addEventListener("touchmove", (e) => {
-    e.preventDefault();
-    const t = e.touches[0];
-    if (t) updateAimFromClientPos(t.clientX, t.clientY);
-  }, { passive: false });
-}
-
-socket.on("connect", () => setStatus("Connected. Create, join, or quick-start."));
-
-socket.on("activity_log_init", ({ logs }) => {
-  activityLogs.length = 0;
-  for (const l of logs || []) activityLogs.push(l);
-  renderActivityLogs();
+  }, 170);
 });
 
-socket.on("activity_log", (log) => {
-  addActivityLog(log);
+window.addEventListener("mouseup", () => {
+  mouseFireHeld = false;
+  if (!fireHoldTimer) return;
+  clearInterval(fireHoldTimer);
+  fireHoldTimer = null;
+});
+
+applyControlsVisibility();
+
+joystickBase.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  joystick.active = true;
+  joystick.pointerId = e.pointerId;
+  joystickBase.setPointerCapture(e.pointerId);
+  updateJoystick(e.clientX, e.clientY);
+});
+joystickBase.addEventListener("pointermove", (e) => {
+  if (!joystick.active || e.pointerId !== joystick.pointerId) return;
+  e.preventDefault();
+  updateJoystick(e.clientX, e.clientY);
+});
+
+const endJoy = (e) => {
+  if (!joystick.active || e.pointerId !== joystick.pointerId) return;
+  e.preventDefault();
+  resetJoystick();
+};
+joystickBase.addEventListener("pointerup", endJoy);
+joystickBase.addEventListener("pointercancel", endJoy);
+joystickBase.addEventListener("lostpointercapture", resetJoystick);
+
+const startFire = (e) => {
+  e.preventDefault();
+  tryShoot();
+  if (fireHoldTimer) clearInterval(fireHoldTimer);
+  fireHoldTimer = setInterval(tryShoot, 170);
+};
+const endFire = (e) => {
+  e.preventDefault();
+  if (!fireHoldTimer) return;
+  clearInterval(fireHoldTimer);
+  fireHoldTimer = null;
+};
+
+fireBtn.addEventListener("pointerdown", startFire);
+fireBtn.addEventListener("pointerup", endFire);
+fireBtn.addEventListener("pointercancel", endFire);
+fireBtn.addEventListener("pointerleave", endFire);
+fireBtn.addEventListener("touchstart", startFire, { passive: false });
+fireBtn.addEventListener("touchend", endFire, { passive: false });
+fireBtn.addEventListener("touchcancel", endFire, { passive: false });
+const pressReload = (e) => {
+  e.preventDefault();
+  tryReload();
+};
+reloadBtn.addEventListener("pointerdown", pressReload);
+reloadBtn.addEventListener("touchstart", pressReload, { passive: false });
+
+canvas.addEventListener("touchstart", (e) => {
+  e.preventDefault();
+  const t = e.touches[0];
+  if (t) updateAimFromClientPos(t.clientX, t.clientY);
+}, { passive: false });
+canvas.addEventListener("touchmove", (e) => {
+  e.preventDefault();
+  const t = e.touches[0];
+  if (t) updateAimFromClientPos(t.clientX, t.clientY);
+}, { passive: false });
+
+socket.on("connect", () => {
+  setStatus("Connected. Create, join, or quick-start.");
+  updateChatModeLabel();
+  socket.emit("request_chat_init");
+  socket.emit("request_lobby_snapshot");
+});
+
+socket.on("chat_init", ({ messages }) => {
+  chatMessages.length = 0;
+  for (const m of messages || []) chatMessages.push(m);
+  renderChatMessages();
+});
+
+socket.on("chat_message", (msg) => {
+  addChatMessage(msg);
+});
+
+socket.on("chat_error", ({ reason }) => {
+  setStatus(reason || "Chat failed.", true);
 });
 
 socket.on("profile", ({ id, name }) => {
   selfId = id;
-  selfName = name;
-  nameInput.value = name;
+  selfName = name || "";
+  nameInput.value = selfName;
+  if (!hasCustomName()) {
+    setStatus("Enter your name (min 2 chars) to start playing.");
+  }
 });
 
 socket.on("lobby_snapshot", ({ onlineCount: oc, queueCount: qc, players: p }) => {
@@ -412,11 +576,17 @@ socket.on("lobby_snapshot", ({ onlineCount: oc, queueCount: qc, players: p }) =>
 });
 
 socket.on("challenge_received", ({ fromId, fromName }) => {
-  const accept = window.confirm(`${fromName} challenged you. Accept?`);
-  socket.emit("respond_challenge", { fromId, accept });
+  pendingChallengeFromId = fromId;
+  challengePromptText.textContent = `${fromName} challenged you. Accept?`;
+  challengePrompt.style.display = "block";
+  setStatus("Challenge received.");
 });
 
-socket.on("challenge_declined", ({ by }) => setStatus(`${by} declined challenge.`, true));
+socket.on("challenge_declined", ({ by }) => {
+  setStatus(`${by} declined challenge.`, true);
+  challengePrompt.style.display = "none";
+  pendingChallengeFromId = null;
+});
 socket.on("challenge_error", ({ reason }) => setStatus(reason || "Challenge failed.", true));
 
 socket.on("quick_match_searching", () => {
@@ -425,8 +595,16 @@ socket.on("quick_match_searching", () => {
 });
 socket.on("quick_match_error", ({ reason }) => setStatus(reason || "Quick match failed.", true));
 
-socket.on("match_created", ({ source }) => {
+socket.on("match_created", ({ source, roomCode: code }) => {
   quickSearching = false;
+  challengePrompt.style.display = "none";
+  pendingChallengeFromId = null;
+  if (code) {
+    roomCode = code;
+    roomLabel.textContent = `Room: ${code}`;
+    updateChatModeLabel();
+    socket.emit("request_chat_init");
+  }
   setStatus(source === "challenge" ? "Challenge match started." : "Quick match found.");
 });
 
@@ -434,6 +612,8 @@ socket.on("room_created", ({ roomCode: code }) => {
   roomCode = code;
   roomInput.value = code;
   roomLabel.textContent = `Room: ${code}`;
+  updateChatModeLabel();
+  socket.emit("request_chat_init");
   setStatus("Room created. Share code to invite.");
 });
 
@@ -441,6 +621,7 @@ socket.on("room_info", ({ roomCode: code, count, max }) => {
   roomCode = code;
   roomLabel.textContent = `Room: ${code}`;
   playersLabel.textContent = `Players: ${count}/${max}`;
+  updateChatModeLabel();
 });
 
 socket.on("join_failed", ({ reason }) => setStatus(reason || "Failed to join.", true));
@@ -449,6 +630,9 @@ socket.on("match_ready", () => {
   matchReady = true;
   matchOver = false;
   winnerId = null;
+  challengePrompt.style.display = "none";
+  pendingChallengeFromId = null;
+  setInMatchUI(true);
   appendFeed("Match ready");
   setStatus("Match ready.");
 });
@@ -506,6 +690,8 @@ socket.on("match_restarted", () => {
   tracers.length = 0;
   burstFx.length = 0;
   floatTexts.length = 0;
+  muzzleFx.length = 0;
+  setInMatchUI(true);
   updateRestartPrompt();
   setStatus("Match restarted.");
 });
@@ -513,7 +699,27 @@ socket.on("match_restarted", () => {
 socket.on("opponent_left", () => {
   matchReady = false;
   roundLive = false;
+  challengePrompt.style.display = "none";
+  pendingChallengeFromId = null;
+  roomCode = null;
+  updateChatModeLabel();
+  socket.emit("request_chat_init");
+  setInMatchUI(false);
   setStatus("Opponent left room.", true);
+});
+
+socket.on("room_closed", ({ reason }) => {
+  matchReady = false;
+  roundLive = false;
+  matchOver = false;
+  winnerId = null;
+  roomCode = null;
+  updateChatModeLabel();
+  socket.emit("request_chat_init");
+  roomLabel.textContent = "Room: -";
+  playersLabel.textContent = "Players: 0/2";
+  setInMatchUI(false);
+  setStatus(reason || "Room closed.");
 });
 
 socket.on("room_settings", ({ scoreLimit: limit }) => {
@@ -542,6 +748,21 @@ socket.on("state", (snapshot) => {
 });
 
 socket.on("shot_fired", (shot) => {
+  const dx = shot.endX - shot.startX;
+  const dy = shot.endY - shot.startY;
+  const len = Math.hypot(dx, dy) || 1;
+  const dirX = dx / len;
+  const dirY = dy / len;
+
+  recentShotUntil[shot.shooterId] = Date.now() + 120;
+  muzzleFx.push({
+    x: shot.startX + dirX * 26,
+    y: shot.startY + dirY * 26,
+    angle: Math.atan2(dirY, dirX),
+    hit: !!shot.hit,
+    expiresAt: Date.now() + 90
+  });
+
   tracers.push({
     ...shot,
     expiresAt: Date.now() + 120
@@ -613,7 +834,7 @@ function drawPickup(now) {
   const pulse = 8 + Math.sin(t) * 3;
   const colorByType = {
     speed: "#46c6ff",
-    heal: "#2ce09f",
+    heal: "#39ffb8",
     multiplier: "#ffcb45",
     shield: "#b38cff"
   };
@@ -641,16 +862,37 @@ function drawPlayers(now) {
     const isMe = id === selfId;
     const dead = p.isDead;
     const c = isMe ? "#58a0ff" : "#ff647f";
+    const phase = idPhase(id);
+    const bob = dead ? 0 : Math.sin(now / 210 + phase * Math.PI * 2) * 1.6;
 
     if (!dead) {
       const dx = p.aimX - p.x;
       const dy = p.aimY - p.y;
       const len = Math.hypot(dx, dy) || 1;
+      const dirX = dx / len;
+      const dirY = dy / len;
+      const angle = Math.atan2(dirY, dirX);
+      const recoil = (recentShotUntil[id] || 0) > Date.now() ? 4 : 0;
+
+      // Gun body with tiny recoil animation.
+      ctx.save();
+      ctx.translate(p.x + bob, p.y + bob);
+      ctx.rotate(angle);
+      const gunBaseColor = isMe ? "#b8d7ff" : "#ffd1da";
+      const gunGlow = isMe ? "rgba(122,192,255,0.55)" : "rgba(255,148,170,0.55)";
+      ctx.shadowColor = gunGlow;
+      ctx.shadowBlur = 8;
+      ctx.fillStyle = gunBaseColor;
+      ctx.fillRect(6 - recoil, -4, 24, 8);
+      ctx.fillStyle = "#2a2f39";
+      ctx.fillRect(20 - recoil, -2, 14, 4);
+      ctx.restore();
+
       ctx.strokeStyle = isMe ? "rgba(114,176,255,.8)" : "rgba(255,137,156,.8)";
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-      ctx.lineTo(p.x + (dx / len) * 32, p.y + (dy / len) * 32);
+      ctx.moveTo(p.x + bob, p.y + bob);
+      ctx.lineTo(p.x + bob + dirX * 34, p.y + bob + dirY * 34);
       ctx.stroke();
     }
 
@@ -658,37 +900,62 @@ function drawPlayers(now) {
       ctx.strokeStyle = "rgba(136,255,225,0.75)";
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(p.x, p.y, 22 + Math.sin(now / 110) * 1.8, 0, Math.PI * 2);
+      ctx.arc(p.x + bob, p.y + bob, 22 + Math.sin(now / 110) * 1.8, 0, Math.PI * 2);
       ctx.stroke();
     }
 
-    ctx.fillStyle = dead ? "#555a62" : c;
+    const bodyX = p.x + bob;
+    const bodyY = p.y + bob;
+    const bodyGrad = ctx.createRadialGradient(bodyX - 6, bodyY - 8, 2, bodyX, bodyY, 24);
+    bodyGrad.addColorStop(0, dead ? "#7b818a" : isMe ? "#89baff" : "#ffa4b5");
+    bodyGrad.addColorStop(1, dead ? "#4c535d" : c);
+    ctx.fillStyle = bodyGrad;
     ctx.beginPath();
-    ctx.arc(p.x, p.y, 16, 0, Math.PI * 2);
+    ctx.arc(bodyX, bodyY, 16, 0, Math.PI * 2);
     ctx.fill();
+    ctx.strokeStyle = "rgba(20,28,40,0.8)";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(bodyX, bodyY, 16, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Simple texture stripes.
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(bodyX, bodyY, 15.5, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.strokeStyle = "rgba(255,255,255,0.16)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(bodyX - 14, bodyY - 5);
+    ctx.lineTo(bodyX + 14, bodyY - 11);
+    ctx.moveTo(bodyX - 14, bodyY + 3);
+    ctx.lineTo(bodyX + 14, bodyY - 3);
+    ctx.stroke();
+    ctx.restore();
 
     const hpRatio = clamp((p.hp || 0) / 100, 0, 1);
     ctx.fillStyle = "#2d3645";
-    ctx.fillRect(p.x - 20, p.y - 29, 40, 5);
-    ctx.fillStyle = hpRatio > 0.35 ? "#2cc8a3" : "#e45858";
-    ctx.fillRect(p.x - 20, p.y - 29, 40 * hpRatio, 5);
+    ctx.fillRect(bodyX - 20, bodyY - 29, 40, 5);
+    ctx.fillStyle = hpRatio > 0.35 ? "#39ffb8" : "#e45858";
+    ctx.fillRect(bodyX - 20, bodyY - 29, 40 * hpRatio, 5);
 
     ctx.fillStyle = "#d5e5ff";
     ctx.font = "11px Segoe UI";
     ctx.textAlign = "center";
-    ctx.fillText(p.name || "Player", p.x, p.y + 28);
+    ctx.fillText(p.name || "Player", bodyX, bodyY + 28);
     ctx.textAlign = "start";
   }
 }
 
-function drawTracers(now) {
+function drawTracers(nowMs) {
   for (let i = tracers.length - 1; i >= 0; i--) {
     const t = tracers[i];
-    if (t.expiresAt <= now) {
+    if (t.expiresAt <= nowMs) {
       tracers.splice(i, 1);
       continue;
     }
-    const a = (t.expiresAt - now) / 120;
+    const a = (t.expiresAt - nowMs) / 120;
     const isMe = t.shooterId === selfId;
     const color = t.hit
       ? (isMe ? `rgba(255,226,120,${a})` : `rgba(255,130,145,${a})`)
@@ -702,14 +969,14 @@ function drawTracers(now) {
   }
 }
 
-function drawBurst(now) {
+function drawBurst(nowMs) {
   for (let i = burstFx.length - 1; i >= 0; i--) {
     const b = burstFx[i];
-    if (b.expiresAt <= now) {
+    if (b.expiresAt <= nowMs) {
       burstFx.splice(i, 1);
       continue;
     }
-    const t = 1 - (b.expiresAt - now) / 180;
+    const t = 1 - (b.expiresAt - nowMs) / 180;
     const r = 6 + t * 16;
     ctx.strokeStyle = `rgba(255,220,140,${1 - t})`;
     ctx.lineWidth = 2;
@@ -719,38 +986,42 @@ function drawBurst(now) {
   }
 }
 
-function drawFloatTexts(now) {
+function drawFloatTexts(nowMs) {
   for (let i = floatTexts.length - 1; i >= 0; i--) {
     const f = floatTexts[i];
-    if (f.expiresAt <= now) {
+    if (f.expiresAt <= nowMs) {
       floatTexts.splice(i, 1);
       continue;
     }
-    const t = 1 - (f.expiresAt - now) / 520;
+    const t = 1 - (f.expiresAt - nowMs) / 520;
     ctx.fillStyle = `rgba(255,220,140,${1 - t})`;
     ctx.font = "bold 16px Segoe UI";
     ctx.fillText(f.text, f.x, f.y - t * 18);
   }
 }
 
-function drawMiniMap() {
-  const w = 160;
-  const h = 96;
-  const x = canvas.width - w - 12;
-  const y = 12;
-
-  ctx.fillStyle = "rgba(12,20,30,0.72)";
-  ctx.fillRect(x, y, w, h);
-  ctx.strokeStyle = "rgba(110,140,170,0.7)";
-  ctx.strokeRect(x, y, w, h);
-
-  for (const [id, p] of Object.entries(players)) {
-    const px = x + (p.x / canvas.width) * w;
-    const py = y + (p.y / canvas.height) * h;
-    ctx.fillStyle = id === selfId ? "#6ab1ff" : "#ff7e92";
+function drawMuzzle(nowMs) {
+  for (let i = muzzleFx.length - 1; i >= 0; i--) {
+    const m = muzzleFx[i];
+    if (m.expiresAt <= nowMs) {
+      muzzleFx.splice(i, 1);
+      continue;
+    }
+    const t = (m.expiresAt - nowMs) / 90;
+    ctx.save();
+    ctx.translate(m.x, m.y);
+    ctx.rotate(m.angle);
+    ctx.globalAlpha = t;
+    ctx.fillStyle = m.hit ? "#ffe18a" : "#ffd3a1";
+    ctx.shadowColor = "#ffd36a";
+    ctx.shadowBlur = 12;
     ctx.beginPath();
-    ctx.arc(px, py, 4, 0, Math.PI * 2);
+    ctx.moveTo(0, 0);
+    ctx.lineTo(18 + 8 * t, -5 - 2 * t);
+    ctx.lineTo(18 + 8 * t, 5 + 2 * t);
+    ctx.closePath();
     ctx.fill();
+    ctx.restore();
   }
 }
 
@@ -761,9 +1032,27 @@ function drawHud(now) {
   ctx.fillStyle = "#e8edf5";
   ctx.font = "16px Segoe UI";
   ctx.fillText(`HP: ${me.hp}`, 12, 24);
-  if (me.isShielded) ctx.fillText("SPAWN SHIELD", 12, 46);
-  if (me.hasSpeedBoost) ctx.fillText("SPEED BOOST", 12, me.isShielded ? 68 : 46);
-  if (me.hasMultiplier) ctx.fillText(`DMG x${me.multiplierValue.toFixed(2)}`, 12, me.isShielded || me.hasSpeedBoost ? 90 : 68);
+  ctx.fillText(`AMMO: ${me.ammo ?? CLIP_SIZE}/${CLIP_SIZE}`, 12, 46);
+  let effectY = 68;
+  if (me.isShielded) {
+    ctx.fillText("SPAWN SHIELD", 12, effectY);
+    effectY += 22;
+  }
+  if (me.hasSpeedBoost) {
+    ctx.fillText("SPEED BOOST", 12, effectY);
+    effectY += 22;
+  }
+  if (me.hasMultiplier) {
+    ctx.fillText(`DMG x${me.multiplierValue.toFixed(2)}`, 12, effectY);
+    effectY += 22;
+  }
+  if (me.isReloading) {
+    const leftMs = Math.max(0, (me.reloadEndsAt || 0) - Date.now());
+    const left = (leftMs / 1000).toFixed(1);
+    ctx.fillStyle = "#2bffb8";
+    ctx.fillText(`RELOADING ${left}s`, 12, effectY);
+    ctx.fillStyle = "#e8edf5";
+  }
 
   if (Date.now() - lastShotAt < 120) {
     ctx.fillStyle = "#ffd166";
@@ -796,15 +1085,16 @@ function drawHud(now) {
   }
 }
 
-function render(now = performance.now()) {
-  drawArena(now);
-  drawPickup(now);
-  drawTracers(now);
-  drawPlayers(now);
-  drawBurst(now);
-  drawFloatTexts(now);
-  drawMiniMap();
-  drawHud(now);
+function render(nowPerf = performance.now()) {
+  const nowMs = Date.now();
+  drawArena(nowPerf);
+  drawPickup(nowPerf);
+  drawTracers(nowMs);
+  drawPlayers(nowPerf);
+  drawMuzzle(nowMs);
+  drawBurst(nowMs);
+  drawFloatTexts(nowMs);
+  drawHud(nowPerf);
   requestAnimationFrame(render);
 }
 

@@ -16,6 +16,8 @@ const HIT_RADIUS = 22;
 const PLAYER_SPEED = 280;
 const FIRE_RANGE = 1200;
 const FIRE_COOLDOWN_MS = 160;
+const CLIP_SIZE = 8;
+const RELOAD_MS = 1300;
 const DAMAGE = 34;
 const RESPAWN_MS = 1500;
 const RESPAWN_PROTECT_MS = 2200;
@@ -47,10 +49,15 @@ const SPAWN_POINTS = [
 ];
 
 const rooms = new Map();
-const clients = new Map(); // socketId -> { name }
+const clients = new Map(); // socketId -> { name, hasName, lastChatAt }
 const quickQueue = [];
+const pendingChallenges = new Map(); // targetId -> fromId
 const activityLogs = [];
 const MAX_ACTIVITY_LOGS = 150;
+const CHAT_COOLDOWN_MS = 1200;
+const CHAT_MAX_LEN = 120;
+const globalChatMessages = [];
+const MAX_GLOBAL_CHAT = 120;
 
 function makeRoomCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -93,8 +100,35 @@ function pushActivity({ actorId = null, name = null, action, roomCode = null }) 
   io.emit("activity_log", log);
 }
 
-function randomGuestName() {
-  return `Guest-${Math.floor(1000 + Math.random() * 9000)}`;
+function sanitizeName(value) {
+  if (typeof value !== "string") return "";
+  const cleaned = value.replace(/[^\w\s.-]/g, "").trim();
+  return cleaned.slice(0, 16);
+}
+
+function sanitizeChatText(value) {
+  if (typeof value !== "string") return "";
+  return value.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim().slice(0, CHAT_MAX_LEN);
+}
+
+function hasCustomName(socketId) {
+  return !!clients.get(socketId)?.hasName;
+}
+
+function emitNameRequired(socket, channel = "join_failed") {
+  const reason = "Set your name first (minimum 2 characters).";
+  socket.emit(channel, { reason });
+}
+
+function emitChatInit(socket) {
+  const roomCode = socket.data.roomCode;
+  const room = roomCode ? rooms.get(roomCode) : null;
+  if (room && room.players.has(socket.id)) {
+    if (!Array.isArray(room.chatMessages)) room.chatMessages = [];
+    socket.emit("chat_init", { messages: room.chatMessages });
+    return;
+  }
+  socket.emit("chat_init", { messages: globalChatMessages });
 }
 
 function isSocketIdle(socketId) {
@@ -116,6 +150,7 @@ function pushLobbySnapshot() {
   const waiters = [];
   for (const [id, profile] of clients) {
     if (!isSocketIdle(id)) continue;
+    if (!profile.hasName) continue;
     waiters.push({ id, name: profile.name });
   }
 
@@ -254,6 +289,8 @@ function makePlayer(slot) {
     roundWins: 0,
     input: { up: false, down: false, left: false, right: false, aimX: p.x, aimY: p.y },
     lastFireAt: 0,
+    ammo: CLIP_SIZE,
+    reloadingUntil: 0,
     deadUntil: 0,
     spawnShieldUntil: Date.now() + RESPAWN_PROTECT_MS,
     speedUntil: 0,
@@ -272,6 +309,8 @@ function resetPlayerForRound(player, slot) {
   player.kills = 0;
   player.deaths = 0;
   player.lastFireAt = 0;
+  player.ammo = CLIP_SIZE;
+  player.reloadingUntil = 0;
   player.deadUntil = 0;
   player.spawnShieldUntil = Date.now() + RESPAWN_PROTECT_MS;
   player.speedUntil = 0;
@@ -325,6 +364,7 @@ function getRoomStateForClient(room, selfId) {
   const now = Date.now();
   const players = {};
   for (const [id, p] of room.players) {
+    const isReloading = p.reloadingUntil > now;
     players[id] = {
       x: p.x,
       y: p.y,
@@ -341,6 +381,9 @@ function getRoomStateForClient(room, selfId) {
       hasSpeedBoost: p.speedUntil > now,
       hasMultiplier: p.multiplierUntil > now,
       multiplierValue: p.multiplierUntil > now ? p.multiplierValue : 1,
+      ammo: p.ammo,
+      isReloading,
+      reloadEndsAt: isReloading ? p.reloadingUntil : 0,
       name: clients.get(id)?.name || "Player"
     };
   }
@@ -362,6 +405,17 @@ function getRoomStateForClient(room, selfId) {
   };
 }
 
+function beginReload(room, playerId, now = Date.now()) {
+  const player = room.players.get(playerId);
+  if (!player) return false;
+  if (!room.roundLive || room.matchOver) return false;
+  if (player.deadUntil > now) return false;
+  if (player.reloadingUntil > now) return false;
+  if (player.ammo >= CLIP_SIZE) return false;
+  player.reloadingUntil = now + RELOAD_MS;
+  return true;
+}
+
 function resolveShoot(room, shooterId, shotAim) {
   const now = Date.now();
   const shooter = room.players.get(shooterId);
@@ -369,10 +423,17 @@ function resolveShoot(room, shooterId, shotAim) {
   if (!room.roundLive) return null;
   if (room.matchOver) return null;
   if (shooter.deadUntil > now) return null;
+  // Spawn shield is invincibility + no-shoot window to prevent respawn advantage.
   if (shooter.spawnShieldUntil > now) return null;
+  if (shooter.reloadingUntil > now) return null;
+  if (shooter.ammo <= 0) {
+    beginReload(room, shooterId, now);
+    return null;
+  }
   if (now - shooter.lastFireAt < FIRE_COOLDOWN_MS) return null;
 
   shooter.lastFireAt = now;
+  shooter.ammo = Math.max(0, shooter.ammo - 1);
 
   if (shotAim && Number.isFinite(shotAim.aimX) && Number.isFinite(shotAim.aimY)) {
     shooter.aimX = shotAim.aimX;
@@ -496,7 +557,8 @@ function createRoomForPair(socketA, socketB, source = "quick_match") {
     restartPending: false,
     restartRequesterId: null,
     restartVotes: new Set(),
-    pickup: createPickup()
+    pickup: createPickup(),
+    chatMessages: []
   };
   rooms.set(roomCode, room);
 
@@ -510,6 +572,7 @@ function createRoomForPair(socketA, socketB, source = "quick_match") {
 
   resetMatch(room);
   io.to(roomCode).emit("room_info", { roomCode, count: room.players.size, max: 2 });
+  io.to(roomCode).emit("chat_init", { messages: room.chatMessages });
   io.to(roomCode).emit("match_ready");
   io.to(roomCode).emit("round_countdown", {
     roundNumber: room.roundNumber,
@@ -532,17 +595,43 @@ function tryPairQuickQueue() {
 }
 
 io.on("connection", (socket) => {
-  clients.set(socket.id, { name: randomGuestName() });
+  clients.set(socket.id, { name: "", hasName: false, lastChatAt: 0 });
   socket.emit("profile", { id: socket.id, name: clients.get(socket.id).name });
   socket.emit("activity_log_init", { logs: activityLogs.slice(0, 40) });
   pushActivity({ actorId: socket.id, action: "came online" });
   pushLobbySnapshot();
 
+  socket.on("request_activity_logs", () => {
+    socket.emit("activity_log_init", { logs: activityLogs.slice(0, 40) });
+  });
+
+  socket.on("request_lobby_snapshot", () => {
+    const onlineCount = clients.size;
+    const players = [];
+    for (const [id, profile] of clients) {
+      if (!isSocketIdle(id) || id === socket.id || !profile.hasName) continue;
+      players.push({ id, name: profile.name });
+    }
+    socket.emit("lobby_snapshot", {
+      onlineCount,
+      queueCount: quickQueue.length,
+      players
+    });
+  });
+
+  socket.on("request_chat_init", () => {
+    emitChatInit(socket);
+  });
+
   socket.on("set_name", ({ name }) => {
-    const trimmed = typeof name === "string" ? name.trim() : "";
-    if (!trimmed) return;
-    const oldName = clients.get(socket.id).name;
-    clients.get(socket.id).name = trimmed.slice(0, 16);
+    const trimmed = sanitizeName(name);
+    if (trimmed.length < 2) {
+      socket.emit("join_failed", { reason: "Name must be at least 2 characters." });
+      return;
+    }
+    const oldName = clients.get(socket.id).name || "(unset)";
+    clients.get(socket.id).name = trimmed;
+    clients.get(socket.id).hasName = true;
     socket.emit("profile", { id: socket.id, name: clients.get(socket.id).name });
     pushActivity({
       actorId: socket.id,
@@ -552,6 +641,10 @@ io.on("connection", (socket) => {
   });
 
   socket.on("request_quick_match", () => {
+    if (!hasCustomName(socket.id)) {
+      emitNameRequired(socket, "quick_match_error");
+      return;
+    }
     if (!isSocketIdle(socket.id)) {
       socket.emit("quick_match_error", { reason: "Already in a room." });
       return;
@@ -570,6 +663,10 @@ io.on("connection", (socket) => {
   });
 
   socket.on("send_challenge", ({ targetId }) => {
+    if (!hasCustomName(socket.id)) {
+      emitNameRequired(socket, "challenge_error");
+      return;
+    }
     if (!targetId || targetId === socket.id) return;
     const target = io.sockets.sockets.get(targetId);
     if (!target) return;
@@ -577,6 +674,7 @@ io.on("connection", (socket) => {
       socket.emit("challenge_error", { reason: "Target not available." });
       return;
     }
+    pendingChallenges.set(targetId, socket.id);
     pushActivity({
       actorId: socket.id,
       action: `challenged ${clients.get(targetId)?.name || "Player"}`
@@ -590,6 +688,17 @@ io.on("connection", (socket) => {
   socket.on("respond_challenge", ({ fromId, accept }) => {
     const challenger = io.sockets.sockets.get(fromId);
     if (!challenger) return;
+    if (!hasCustomName(socket.id) || !hasCustomName(fromId)) {
+      socket.emit("challenge_error", { reason: "Both players must set names first." });
+      return;
+    }
+    const expectedFrom = pendingChallenges.get(socket.id);
+    if (expectedFrom !== fromId) {
+      socket.emit("challenge_error", { reason: "Challenge expired." });
+      return;
+    }
+    pendingChallenges.delete(socket.id);
+
     if (!isSocketIdle(socket.id) || !isSocketIdle(fromId)) {
       socket.emit("challenge_error", { reason: "Challenge expired." });
       challenger.emit("challenge_declined", { by: clients.get(socket.id)?.name || "Player" });
@@ -616,10 +725,15 @@ io.on("connection", (socket) => {
   });
 
   socket.on("create_room", () => {
+    if (!hasCustomName(socket.id)) {
+      emitNameRequired(socket, "join_failed");
+      return;
+    }
     if (!isSocketIdle(socket.id)) {
       socket.emit("join_failed", { reason: "Already in a room" });
       return;
     }
+    pendingChallenges.delete(socket.id);
     removeFromQuickQueue(socket.id);
     const roomCode = createUniqueRoomCode();
     const room = {
@@ -637,7 +751,8 @@ io.on("connection", (socket) => {
       restartPending: false,
       restartRequesterId: null,
       restartVotes: new Set(),
-      pickup: createPickup()
+      pickup: createPickup(),
+      chatMessages: []
     };
     rooms.set(roomCode, room);
 
@@ -647,11 +762,16 @@ io.on("connection", (socket) => {
 
     socket.emit("room_created", { roomCode });
     io.to(roomCode).emit("room_info", { roomCode, count: room.players.size, max: 2 });
+    socket.emit("chat_init", { messages: room.chatMessages });
     pushActivity({ actorId: socket.id, action: `created room ${roomCode}`, roomCode });
     pushLobbySnapshot();
   });
 
   socket.on("join_room", ({ roomCode }) => {
+    if (!hasCustomName(socket.id)) {
+      emitNameRequired(socket, "join_failed");
+      return;
+    }
     if (!roomCode || typeof roomCode !== "string") {
       socket.emit("join_failed", { reason: "Invalid room code" });
       return;
@@ -672,15 +792,18 @@ io.on("connection", (socket) => {
       return;
     }
 
+    pendingChallenges.delete(socket.id);
     removeFromQuickQueue(socket.id);
     socket.join(code);
     socket.data.roomCode = code;
+    if (!Array.isArray(room.chatMessages)) room.chatMessages = [];
     room.players.set(socket.id, makePlayer(1));
     room.restartPending = false;
     room.restartRequesterId = null;
     room.restartVotes = new Set();
 
     io.to(code).emit("room_info", { roomCode: code, count: room.players.size, max: 2 });
+    socket.emit("chat_init", { messages: room.chatMessages || [] });
 
     if (room.players.size === 2) {
       resetMatch(room);
@@ -790,8 +913,113 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("reload", () => {
+    const roomCode = socket.data.roomCode;
+    const room = roomCode ? rooms.get(roomCode) : null;
+    if (!room) return;
+    beginReload(room, socket.id);
+  });
+
+  socket.on("chat_send", ({ text }) => {
+    const roomCode = socket.data.roomCode;
+    const room = roomCode ? rooms.get(roomCode) : null;
+    if (!hasCustomName(socket.id)) {
+      socket.emit("chat_error", { reason: "Set your name first." });
+      return;
+    }
+
+    const profile = clients.get(socket.id);
+    const now = Date.now();
+    if (!profile) return;
+    const waitMs = profile.lastChatAt + CHAT_COOLDOWN_MS - now;
+    if (waitMs > 0) {
+      socket.emit("chat_error", { reason: `Wait ${Math.ceil(waitMs / 1000)}s before sending another message.` });
+      return;
+    }
+
+    const clean = sanitizeChatText(text);
+    if (!clean) return;
+    profile.lastChatAt = now;
+
+    const msg = {
+      time: now,
+      timeText: fmtTime(now),
+      senderId: socket.id,
+      name: profile.name,
+      text: clean
+    };
+
+    if (room && room.players.has(socket.id)) {
+      if (!Array.isArray(room.chatMessages)) room.chatMessages = [];
+      room.chatMessages.push(msg);
+      if (room.chatMessages.length > 80) room.chatMessages.shift();
+      io.to(roomCode).emit("chat_message", msg);
+      return;
+    }
+
+    globalChatMessages.push(msg);
+    if (globalChatMessages.length > MAX_GLOBAL_CHAT) globalChatMessages.shift();
+    for (const peer of io.sockets.sockets.values()) {
+      if (!peer.data.roomCode) peer.emit("chat_message", msg);
+    }
+  });
+
+  socket.on("leave_room", () => {
+    const roomCode = socket.data.roomCode;
+    if (!roomCode) {
+      socket.emit("room_closed", { reason: "Already in lobby." });
+      return;
+    }
+    const room = rooms.get(roomCode);
+    if (!room) {
+      socket.data.roomCode = null;
+      socket.emit("room_closed", { reason: "Returned to lobby." });
+      pushLobbySnapshot();
+      return;
+    }
+
+    removeFromQuickQueue(socket.id);
+    pendingChallenges.delete(socket.id);
+    room.players.delete(socket.id);
+    socket.leave(roomCode);
+    socket.data.roomCode = null;
+
+    if (room.ownerId === socket.id) {
+      const next = room.players.keys().next();
+      room.ownerId = next.done ? null : next.value;
+    }
+
+    room.restartPending = false;
+    room.restartRequesterId = null;
+    room.restartVotes = new Set();
+
+    socket.emit("room_closed", { reason: "You left the match." });
+    pushActivity({ actorId: socket.id, action: `left room ${roomCode}`, roomCode });
+
+    if (room.players.size === 1) {
+      const remainingId = room.players.keys().next().value;
+      const remainingSocket = io.sockets.sockets.get(remainingId);
+      if (remainingSocket) {
+        remainingSocket.data.roomCode = null;
+        remainingSocket.leave(roomCode);
+        remainingSocket.emit("room_closed", { reason: "Opponent quit. Returned to lobby." });
+      }
+      rooms.delete(roomCode);
+    } else if (room.players.size === 0) {
+      rooms.delete(roomCode);
+    } else {
+      io.to(roomCode).emit("room_info", { roomCode, count: room.players.size, max: 2 });
+    }
+
+    pushLobbySnapshot();
+  });
+
   socket.on("disconnect", () => {
     removeFromQuickQueue(socket.id);
+    pendingChallenges.delete(socket.id);
+    for (const [targetId, fromId] of pendingChallenges) {
+      if (fromId === socket.id || targetId === socket.id) pendingChallenges.delete(targetId);
+    }
     const leavingName = clients.get(socket.id)?.name || "Player";
     clients.delete(socket.id);
     const roomCode = socket.data.roomCode;
@@ -820,7 +1048,20 @@ io.on("connection", (socket) => {
     io.to(roomCode).emit("opponent_left");
     io.to(roomCode).emit("room_info", { roomCode, count: room.players.size, max: 2 });
 
-    if (room.players.size === 0) rooms.delete(roomCode);
+    if (room.players.size === 1) {
+      // In strict 1v1, dissolve room and return remaining player to lobby state.
+      const remainingId = room.players.keys().next().value;
+      const remainingSocket = io.sockets.sockets.get(remainingId);
+      if (remainingSocket) {
+        remainingSocket.data.roomCode = null;
+        remainingSocket.leave(roomCode);
+        remainingSocket.emit("room_closed", { reason: "Opponent left. Returned to lobby." });
+      }
+      rooms.delete(roomCode);
+    } else if (room.players.size === 0) {
+      rooms.delete(roomCode);
+    }
+
     pushActivity({ name: leavingName, action: `left room ${roomCode} and went offline`, roomCode });
     pushLobbySnapshot();
   });
@@ -849,6 +1090,12 @@ setInterval(() => {
 
     for (const [playerId, player] of room.players) {
       if (!room.roundLive || room.matchOver) continue;
+
+      if (player.reloadingUntil > 0 && player.reloadingUntil <= now) {
+        player.reloadingUntil = 0;
+        player.ammo = CLIP_SIZE;
+      }
+
       if (player.deadUntil > now) continue;
 
       const speedScale = player.speedUntil > now ? SPEED_MULTIPLIER : 1;
@@ -879,6 +1126,8 @@ setInterval(() => {
         const sp = chooseSafeSpawn(room, playerId);
         player.deadUntil = 0;
         player.hp = MAX_HP;
+        player.ammo = CLIP_SIZE;
+        player.reloadingUntil = 0;
         player.x = sp.x;
         player.y = sp.y;
         player.spawnShieldUntil = now + RESPAWN_PROTECT_MS;

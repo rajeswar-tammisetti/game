@@ -11,7 +11,7 @@
       --line: #2f3e54;
       --text: #e8edf5;
       --muted: #9fb0c8;
-      --accent: #2cc8a3;
+      --accent: #2bffb8;
       --danger: #e45858;
       --p1: #4f8cff;
       --p2: #ff5a70;
@@ -52,6 +52,7 @@
       font-size: 14px;
     }
     input { width: 100%; text-transform: uppercase; }
+    input.normal-case { text-transform: none; }
     button {
       cursor: pointer;
       background: color-mix(in oklab, var(--accent), black 65%);
@@ -61,6 +62,22 @@
     button.secondary {
       background: #162334;
       border-color: #2b3f57;
+    }
+    .icon-btn {
+      min-width: 44px;
+      padding: 10px 12px;
+      font-size: 18px;
+      line-height: 1;
+    }
+    #toggleControlsBtn.toggle-on {
+      background: #0f4a34;
+      border-color: #2bffb8;
+      color: #b8ffe7;
+    }
+    #toggleControlsBtn.toggle-off {
+      background: #223147;
+      border-color: #3a516f;
+      color: #b8c8dc;
     }
     .meta { font-size: 13px; color: var(--muted); line-height: 1.5; }
     .scoreboard {
@@ -99,6 +116,19 @@
       display: none;
     }
     .restart-prompt p {
+      margin: 0 0 8px;
+      font-size: 13px;
+      color: #d8e6ff;
+    }
+    .challenge-prompt {
+      margin-top: 10px;
+      padding: 10px;
+      border: 1px solid #516a8a;
+      border-radius: 10px;
+      background: #162133;
+      display: none;
+    }
+    .challenge-prompt p {
       margin: 0 0 8px;
       font-size: 13px;
       color: #d8e6ff;
@@ -168,6 +198,12 @@
       color: #ffd27f;
       margin-right: 6px;
     }
+    body.in-match .pregame-only {
+      display: none !important;
+    }
+    body:not(.in-match) .match-only {
+      display: none !important;
+    }
     canvas {
       width: 100%;
       aspect-ratio: 5 / 3;
@@ -222,6 +258,26 @@
       touch-action: none;
       user-select: none;
     }
+    .action-stack {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      pointer-events: auto;
+    }
+    .reload-btn {
+      min-width: 92px;
+      border-radius: 999px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      background: rgba(43, 255, 184, 0.22);
+      color: #f1fff8;
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      padding: 10px 14px;
+      touch-action: none;
+      user-select: none;
+    }
     @media (max-width: 880px) {
       .app { grid-template-columns: 1fr; }
     }
@@ -237,59 +293,72 @@
       <h1 class="title">1v1 Web Arena</h1>
       <p class="sub">WASD move, mouse aim, click shoot. Host on one PC, join from another.</p>
 
-      <div class="row">
+      <div class="row pregame-only">
         <button id="hostBtn">Create Room</button>
       </div>
 
-      <div class="row">
+      <div class="row pregame-only">
         <input id="roomInput" maxlength="8" placeholder="ROOM CODE" />
       </div>
-      <div class="row">
+      <div class="row pregame-only">
         <button id="joinBtn" class="secondary">Join Room</button>
       </div>
 
-      <div class="row">
+      <div class="row pregame-only">
         <input id="scoreLimitInput" type="number" min="1" max="50" value="5" placeholder="SCORE LIMIT" />
       </div>
-      <div class="row">
+      <div class="row pregame-only">
         <button id="setLimitBtn" class="secondary">Set Score Limit</button>
       </div>
       <div class="row">
-        <button id="restartBtn" class="secondary">Request Restart</button>
+        <button id="restartBtn" class="secondary match-only">Request Restart</button>
+        <button id="quitBtn" class="secondary icon-btn" title="Quit Match">⏻</button>
       </div>
       <div class="row">
         <button id="soundBtn" class="secondary">Sound: On</button>
+        <button id="toggleControlsBtn" class="secondary toggle-off">&#x1F579;&#xFE0F; AUTO</button>
       </div>
-      <div class="row">
-        <input id="nameInput" maxlength="16" placeholder="YOUR NAME" />
+      <div class="row pregame-only">
+        <input id="nameInput" class="normal-case" maxlength="16" placeholder="Your Name" />
       </div>
-      <div class="row">
+      <div class="row pregame-only">
         <button id="setNameBtn" class="secondary">Set Name</button>
       </div>
-      <div class="row">
+      <div class="row pregame-only">
         <button id="quickMatchBtn">Start Match</button>
         <button id="cancelQuickBtn" class="secondary">Cancel</button>
       </div>
 
       <p class="meta" id="roomLabel">Room: -</p>
       <p class="meta" id="playersLabel">Players: 0/2</p>
-      <p class="meta" id="onlineLabel">Online: 0</p>
+      <p class="meta pregame-only" id="onlineLabel">Online: 0</p>
       <section class="scoreboard">
         <p class="scoreboard-title">Scoreboard</p>
         <p id="scoreMain" class="scoreboard-main">Me 0 - 0 Enemy</p>
         <p id="scoreSub" class="scoreboard-sub">First to 5</p>
       </section>
-      <section class="lobby-box">
+      <section class="lobby-box pregame-only">
         <p class="lobby-title">Online Players</p>
         <div id="onlineList" class="lobby-list"></div>
       </section>
-      <section class="lobby-box">
+      <section class="lobby-box pregame-only">
         <p class="lobby-title">Feed</p>
         <div id="feed" class="feed"></div>
       </section>
       <section class="lobby-box">
-        <p class="lobby-title">Activity Log</p>
-        <div id="activityList" class="activity"></div>
+        <p id="chatTitle" class="lobby-title">Global Chat</p>
+        <div id="chatList" class="activity"></div>
+        <div class="row" style="margin-top:8px;">
+          <input id="chatInput" class="normal-case" maxlength="120" placeholder="Type message..." />
+          <button id="chatSendBtn" class="secondary">Send</button>
+        </div>
+      </section>
+      <section id="challengePrompt" class="challenge-prompt">
+        <p id="challengePromptText">Player challenged you.</p>
+        <div class="row">
+          <button id="challengeAcceptBtn">Accept</button>
+          <button id="challengeDeclineBtn" class="secondary">Decline</button>
+        </div>
       </section>
       <section id="restartPrompt" class="restart-prompt">
         <p id="restartPromptText">Opponent requested restart.</p>
@@ -309,7 +378,10 @@
     <div id="joystickBase" class="joystick-base">
       <div id="joystickKnob" class="joystick-knob"></div>
     </div>
-    <button id="fireBtn" class="fire-btn">FIRE</button>
+    <div class="action-stack">
+      <button id="reloadBtn" class="reload-btn">RELOAD</button>
+      <button id="fireBtn" class="fire-btn">FIRE</button>
+    </div>
   </div>
 
   <script src="/socket.io/socket.io.js"></script>
