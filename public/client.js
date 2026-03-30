@@ -432,6 +432,14 @@ toggleControlsBtn.onclick = () => {
 };
 
 window.addEventListener("keydown", (e) => {
+  const el = e.target;
+  const typing =
+    el &&
+    (el.tagName === "INPUT" ||
+      el.tagName === "TEXTAREA" ||
+      el.isContentEditable);
+  if (typing) return;
+
   const k = e.key.toLowerCase();
   if (k === "w") input.up = true;
   if (k === "s") input.down = true;
