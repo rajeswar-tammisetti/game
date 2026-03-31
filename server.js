@@ -80,26 +80,34 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-function sideToSlot(side) {
-  return side === "right" ? 1 : 0;
-}
-
-function slotToSide(slot) {
-  return slot === 1 ? "right" : "left";
+function slotToSide(slot, maxPlayers = 2) {
+  const half = Math.max(1, Math.floor(maxPlayers / 2));
+  return slot >= half ? "right" : "left";
 }
 
 function getOccupiedSlots(room) {
   const occupied = new Set();
-  for (const p of room.players.values()) occupied.add(p.slot === 1 ? 1 : 0);
+  for (const p of room.players.values()) occupied.add(p.slot);
   return occupied;
 }
 
 function chooseAvailableSlot(room, preferredSide) {
   const occupied = getOccupiedSlots(room);
-  const preferredSlot = sideToSlot(preferredSide);
-  if (!occupied.has(preferredSlot)) return preferredSlot;
-  const other = preferredSlot === 0 ? 1 : 0;
-  if (!occupied.has(other)) return other;
+  const max = room.maxPlayers || 2;
+  const half = Math.max(1, Math.floor(max / 2));
+  const pIsLeft = preferredSide !== "right";
+  
+  const pStart = pIsLeft ? 0 : half;
+  const pEnd = pIsLeft ? half : max;
+  for (let i = pStart; i < pEnd; i++) {
+    if (!occupied.has(i)) return i;
+  }
+  
+  const oStart = pIsLeft ? half : 0;
+  const oEnd = pIsLeft ? max : half;
+  for (let i = oStart; i < oEnd; i++) {
+    if (!occupied.has(i)) return i;
+  }
   return null;
 }
 
@@ -195,8 +203,15 @@ function distanceSquared(ax, ay, bx, by) {
   return dx * dx + dy * dy;
 }
 
-function baseSpawn(slot) {
-  return slot === 0 ? { x: 150, y: ARENA.height / 2 } : { x: ARENA.width - 150, y: ARENA.height / 2 };
+function baseSpawn(slot, maxPlayers = 2) {
+  const half = Math.max(1, Math.floor(maxPlayers / 2));
+  const isLeft = slot < half;
+  const indexInTeam = isLeft ? slot : slot - half;
+  const teamSize = Math.max(1, half);
+  
+  const y = ARENA.height * ((indexInTeam + 1) / (teamSize + 1));
+  const x = isLeft ? 150 : ARENA.width - 150;
+  return { x: x + (Math.random() * 40 - 20), y: y + (Math.random() * 40 - 20) };
 }
 
 function chooseSafeSpawn(room, respawnId) {
@@ -301,13 +316,14 @@ function consumePickup(room, playerId) {
   room.pickup.nextSpawnAt = Date.now() + PICKUP_RESPAWN_MS;
 }
 
-function makePlayer(slot) {
-  const p = baseSpawn(slot);
+function makePlayer(slot, maxPlayers = 2) {
+  const p = baseSpawn(slot, maxPlayers);
+  const half = Math.max(1, Math.floor(maxPlayers / 2));
   return {
-    slot: slot === 1 ? 1 : 0,
+    slot: slot,
     x: p.x,
     y: p.y,
-    aimX: p.x + (slot === 0 ? 1 : -1),
+    aimX: p.x + (slot < half ? 1 : -1),
     aimY: p.y,
     hp: MAX_HP,
     kills: 0, // kills for current round
@@ -328,12 +344,13 @@ function makePlayer(slot) {
   };
 }
 
-function resetPlayerForRound(player, slot) {
-  const p = baseSpawn(slot);
-  player.slot = slot === 1 ? 1 : 0;
+function resetPlayerForRound(player, slot, maxPlayers = 2) {
+  const p = baseSpawn(slot, maxPlayers);
+  const half = Math.max(1, Math.floor(maxPlayers / 2));
+  player.slot = slot;
   player.x = p.x;
   player.y = p.y;
-  player.aimX = p.x + (slot === 0 ? 1 : -1);
+  player.aimX = p.x + (slot < half ? 1 : -1);
   player.aimY = p.y;
   player.hp = MAX_HP;
   player.kills = 0;
@@ -366,7 +383,7 @@ function resetMatch(room) {
     player.totalKills = 0;
     player.totalDeaths = 0;
     player.roundWins = 0;
-    resetPlayerForRound(player, player.slot);
+    resetPlayerForRound(player, player.slot, room.maxPlayers || 2);
   }
 }
 
@@ -378,7 +395,7 @@ function startNextRound(room) {
   room.pickup = createPickup();
 
   for (const player of room.players.values()) {
-    resetPlayerForRound(player, player.slot);
+    resetPlayerForRound(player, player.slot, room.maxPlayers || 2);
   }
 
   io.to(room.roomCode).emit("round_countdown", {
@@ -409,7 +426,7 @@ function getRoomStateForClient(room, selfId) {
       hasMultiplier: p.multiplierUntil > now,
       multiplierValue: p.multiplierUntil > now ? p.multiplierValue : 1,
       hasTripleShot: p.tripleUntil > now,
-      side: slotToSide(p.slot),
+      side: slotToSide(p.slot, room.maxPlayers || 2),
       ammo: p.ammo,
       isReloading,
       reloadEndsAt: isReloading ? p.reloadingUntil : 0,
@@ -435,19 +452,24 @@ function getRoomStateForClient(room, selfId) {
 }
 
 function emitRoomInfo(room) {
-  let left = null;
-  let right = null;
+  const left = [];
+  const right = [];
+  const max = room.maxPlayers || 2;
+  const half = Math.max(1, Math.floor(max / 2));
   for (const [id, p] of room.players) {
     const name = clients.get(id)?.name || "Player";
     const info = { id, name };
-    if (p.slot === 1) right = info;
-    else left = info;
+    if (p.slot >= half) right.push(info);
+    else left.push(info);
   }
   io.to(room.roomCode).emit("room_info", {
     roomCode: room.roomCode,
+    mode: room.mode || "1v1",
     count: room.players.size,
-    max: 2,
-    sides: { left, right }
+    max,
+    teams: { left, right },
+    ownerId: room.ownerId,
+    searchingLobby: !!room.searchingLobby
   });
 }
 
@@ -473,6 +495,8 @@ function resolveSingleRay(room, shooterId, dirX, dirY, damageOut, now) {
     if (targetId === shooterId) continue;
     if (target.deadUntil > now) continue;
     if (target.spawnShieldUntil > now) continue;
+    const maxPlayers = room.maxPlayers || 2;
+    if (slotToSide(target.slot, maxPlayers) === slotToSide(shooter.slot, maxPlayers)) continue;
 
     const tx = target.x - shooter.x;
     const ty = target.y - shooter.y;
@@ -580,7 +604,13 @@ function handleRoundWin(room, winnerId) {
 
   room.roundLive = false;
   room.roundResetAt = 0;
-  winner.roundWins += 1;
+  
+  const max = room.maxPlayers || 2;
+  const winnerSide = slotToSide(winner.slot, max);
+  
+  for (const p of room.players.values()) {
+    if (slotToSide(p.slot, max) === winnerSide) p.roundWins += 1;
+  }
 
   io.to(room.roomCode).emit("round_over", {
     winnerId,
@@ -651,7 +681,72 @@ function tryPairQuickQueue() {
   }
 }
 
+function matchmakeLobbies() {
+  const searching = [];
+  for (const room of rooms.values()) {
+    if (room.searchingLobby && room.players.size < room.maxPlayers) {
+      searching.push(room);
+    }
+  }
+  
+  const byMode = { "2v2": [], "room": [] };
+  searching.forEach(r => { if (byMode[r.mode]) byMode[r.mode].push(r); });
+  
+  for (const mode of Object.keys(byMode)) {
+    const list = byMode[mode];
+    if (list.length < 2) continue;
+    
+    // Sort descending by size so we fill the largest rooms first
+    list.sort((a, b) => b.players.size - a.players.size);
+    
+    const targetRoom = list[0];
+    for (let i = 1; i < list.length; i++) {
+      const sourceRoom = list[i];
+      if (targetRoom.players.size >= targetRoom.maxPlayers) break;
+      
+      const socketIds = Array.from(sourceRoom.players.keys());
+      for (const socketId of socketIds) {
+        if (targetRoom.players.size >= targetRoom.maxPlayers) break;
+        
+        const socket = io.sockets.sockets.get(socketId);
+        if (!socket) continue;
+        
+        sourceRoom.players.delete(socketId);
+        socket.leave(sourceRoom.roomCode);
+        
+        socket.join(targetRoom.roomCode);
+        socket.data.roomCode = targetRoom.roomCode;
+        
+        const slot = chooseAvailableSlot(targetRoom, "left");
+        targetRoom.players.set(socketId, makePlayer(slot, targetRoom.maxPlayers));
+        
+        socket.emit("room_created", { roomCode: targetRoom.roomCode });
+      }
+      
+      if (sourceRoom.players.size === 0) {
+        rooms.delete(sourceRoom.roomCode);
+      } else {
+        emitRoomInfo(sourceRoom);
+      }
+      emitRoomInfo(targetRoom);
+      
+      if (targetRoom.players.size >= targetRoom.maxPlayers) {
+        targetRoom.searchingLobby = false;
+        resetMatch(targetRoom);
+        emitRoomInfo(targetRoom);
+        io.to(targetRoom.roomCode).emit("match_ready");
+        io.to(targetRoom.roomCode).emit("round_countdown", {
+          roundNumber: targetRoom.roundNumber,
+          endsAt: targetRoom.roundCountdownUntil
+        });
+        break;
+      }
+    }
+  }
+}
+
 io.on("connection", (socket) => {
+  console.log("[server] client connected:", socket.id);
   clients.set(socket.id, { name: "", hasName: false, lastChatAt: 0 });
   socket.emit("profile", { id: socket.id, name: clients.get(socket.id).name });
   socket.emit("activity_log_init", { logs: activityLogs.slice(0, 40) });
@@ -681,6 +776,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("set_name", ({ name }) => {
+    console.log("[server] set_name received from", socket.id, "name:", name);
     const trimmed = sanitizeName(name);
     if (trimmed.length < 2) {
       socket.emit("join_failed", { reason: "Name must be at least 2 characters." });
@@ -786,7 +882,7 @@ io.on("connection", (socket) => {
     pushLobbySnapshot();
   });
 
-  socket.on("create_room", ({ preferredSide } = {}) => {
+  socket.on("create_room", ({ preferredSide, mode } = {}) => {
     if (!hasCustomName(socket.id)) {
       emitNameRequired(socket, "join_failed");
       return;
@@ -798,8 +894,16 @@ io.on("connection", (socket) => {
     pendingChallenges.delete(socket.id);
     removeFromQuickQueue(socket.id);
     const roomCode = createUniqueRoomCode();
+    
+    let maxPlayers = 2;
+    if (mode === "2v2") maxPlayers = 4;
+    else if (mode === "room") maxPlayers = 10;
+    
     const room = {
       roomCode,
+      mode: mode || "1v1",
+      maxPlayers,
+      searchingLobby: false,
       players: new Map(),
       ownerId: socket.id,
       scoreLimit: 5,
@@ -821,7 +925,7 @@ io.on("connection", (socket) => {
     socket.join(roomCode);
     socket.data.roomCode = roomCode;
     const slot = chooseAvailableSlot(room, preferredSide);
-    room.players.set(socket.id, makePlayer(slot === null ? 0 : slot));
+    room.players.set(socket.id, makePlayer(slot === null ? 0 : slot, maxPlayers));
 
     socket.emit("room_created", { roomCode });
     emitRoomInfo(room);
@@ -846,7 +950,11 @@ io.on("connection", (socket) => {
       socket.emit("join_failed", { reason: "Room not found" });
       return;
     }
-    if (room.players.size >= 2) {
+    if (room.roundLive || room.roundCountdownUntil > 0) {
+      socket.emit("join_failed", { reason: "Match already in progress" });
+      return;
+    }
+    if (room.players.size >= (room.maxPlayers || 2)) {
       socket.emit("join_failed", { reason: "Room is full" });
       return;
     }
@@ -865,15 +973,18 @@ io.on("connection", (socket) => {
       socket.emit("join_failed", { reason: "No side slot available" });
       return;
     }
-    room.players.set(socket.id, makePlayer(slot));
+    room.players.set(socket.id, makePlayer(slot, room.maxPlayers || 2));
     room.restartPending = false;
     room.restartRequesterId = null;
     room.restartVotes = new Set();
-
+    
     emitRoomInfo(room);
     socket.emit("chat_init", { messages: room.chatMessages || [] });
 
-    if (room.players.size === 2) {
+    pushActivity({ actorId: socket.id, action: `joined room ${code}`, roomCode: code });
+    
+    // In strict 1v1, automatically start the match if full.
+    if (room.mode === "1v1" && room.players.size === 2) {
       resetMatch(room);
       io.to(code).emit("match_ready");
       io.to(code).emit("round_countdown", {
@@ -881,7 +992,7 @@ io.on("connection", (socket) => {
         endsAt: room.roundCountdownUntil
       });
     }
-    pushActivity({ actorId: socket.id, action: `joined room ${code}`, roomCode: code });
+    
     pushLobbySnapshot();
   });
 
@@ -891,18 +1002,67 @@ io.on("connection", (socket) => {
     if (!room) return;
     const player = room.players.get(socket.id);
     if (!player) return;
-    if (room.players.size >= 2) {
-      socket.emit("join_failed", { reason: "Side lock after both players joined." });
+    if (room.roundLive || room.roundCountdownUntil > 0) {
+      socket.emit("join_failed", { reason: "Match already started." });
       return;
     }
-    const desired = sideToSlot(side);
-    for (const [id, p] of room.players) {
-      if (id !== socket.id && p.slot === desired) {
-        socket.emit("join_failed", { reason: "Selected side already taken." });
-        return;
+
+    const max = room.maxPlayers || 2;
+    const half = Math.max(1, Math.floor(max / 2));
+    
+    let countOnSide = 0;
+    for (const p of room.players.values()) {
+      if (slotToSide(p.slot, max) === side) countOnSide++;
+    }
+    
+    if (countOnSide >= half && slotToSide(player.slot, max) !== side) {
+      socket.emit("join_failed", { reason: "Selected side is full." });
+      return;
+    }
+    
+    const occupied = getOccupiedSlots(room);
+    let newSlot = null;
+    const start = side === "left" ? 0 : half;
+    const end = side === "left" ? half : max;
+    for (let i = start; i < end; i++) {
+      if (!occupied.has(i)) {
+        newSlot = i;
+        break;
       }
     }
-    resetPlayerForRound(player, desired);
+    
+    if (newSlot !== null && newSlot !== player.slot) {
+      resetPlayerForRound(player, newSlot, max);
+      emitRoomInfo(room);
+    }
+  });
+
+  socket.on("start_lobby_search", ({ autofill }) => {
+    const code = socket.data.roomCode;
+    const room = code ? rooms.get(code) : null;
+    if (!room || room.ownerId !== socket.id) return;
+    
+    if (room.players.size >= room.maxPlayers || !autofill) {
+      resetMatch(room);
+      room.searchingLobby = false;
+      emitRoomInfo(room);
+      io.to(code).emit("match_ready");
+      io.to(code).emit("round_countdown", {
+        roundNumber: room.roundNumber,
+        endsAt: room.roundCountdownUntil
+      });
+      return;
+    }
+    
+    room.searchingLobby = true;
+    emitRoomInfo(room);
+  });
+
+  socket.on("cancel_lobby_search", () => {
+    const code = socket.data.roomCode;
+    const room = code ? rooms.get(code) : null;
+    if (!room || room.ownerId !== socket.id) return;
+    room.searchingLobby = false;
     emitRoomInfo(room);
   });
 
@@ -996,7 +1156,12 @@ io.on("connection", (socket) => {
         text: "eliminated"
       });
       const shooter = room.players.get(socket.id);
-      if (shooter && shooter.kills >= room.scoreLimit) {
+      let teamKills = 0;
+      const max = room.maxPlayers || 2;
+      for (const p of room.players.values()) {
+        if (slotToSide(p.slot, max) === slotToSide(shooter.slot, max)) teamKills += p.kills;
+      }
+      if (teamKills >= room.scoreLimit) {
         handleRoundWin(room, socket.id);
       }
       pushActivity({
@@ -1165,6 +1330,8 @@ const TICK_MS = Math.floor(1000 / TICK_RATE);
 setInterval(() => {
   const now = Date.now();
   const dt = TICK_MS / 1000;
+
+  matchmakeLobbies();
 
   for (const [roomCode, room] of rooms) {
     if (room.players.size < 2) {

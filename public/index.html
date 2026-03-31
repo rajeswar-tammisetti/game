@@ -292,10 +292,11 @@
       margin-right: 6px;
     }
     .chat-stream {
+      flex: 1 1 0;
       margin-top: 0;
       max-height: none;
       min-height: 0;
-      overflow: auto;
+      overflow-y: auto;
       padding-right: 2px;
       background: linear-gradient(180deg, rgba(17, 44, 64, 0.55), rgba(13, 25, 39, 0.7));
       border: 1px solid #294764;
@@ -331,11 +332,13 @@
       font-weight: 700;
     }
     #chatCard {
-      display: grid;
+      display: flex;
+      flex-direction: column;
       gap: 8px;
       min-height: 0;
       min-width: 0;
       width: 100%;
+      height: 100%;
     }
     #chatComposer {
       display: grid;
@@ -465,6 +468,18 @@
       touch-action: none;
       user-select: none;
     }
+    .landing-card.column {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .landing-grid {
+      display: grid;
+      grid-template-columns: 1fr 1.6fr 1.4fr;
+      gap: 16px;
+      align-items: stretch;
+      max-height: 600px;
+    }
     @media (max-width: 980px) {
       .landing-grid { grid-template-columns: 1fr; }
       body.in-match .app { grid-template-columns: 1fr; }
@@ -481,15 +496,8 @@
         grid-template-columns: 1fr;
         height: 100%;
       }
-      body.in-match #chatCard {
-        height: 100%;
-        grid-template-rows: auto auto minmax(0, 1fr) auto auto;
-      }
-      body.in-match #chatTitle { grid-row: 1; }
-      body.in-match #restartPrompt { grid-row: 2; margin-top: 0; }
-      body.in-match #chatList { grid-row: 3; min-height: 0; overflow: auto; }
-      body.in-match #chatComposer { grid-row: 4; align-self: end; }
-      body.in-match .match-chat-actions { grid-row: 5; margin: 0; }
+      body.in-match #restartPrompt { margin-top: 0; }
+      body.in-match #chatList { min-height: 0; overflow-y: auto; }
       body.in-match #gamePanel canvas {
         width: 100%;
         height: 100%;
@@ -510,20 +518,47 @@
       <p class="sub landing-only">Choose mode, set your profile, and start quickly.</p>
 
       <div class="landing-grid">
-        <section class="landing-card column pregame-only">
-          <p class="landing-title">Start</p>
-          <button id="homeStartBtn" class="start-hero">Start</button>
+        <section id="startCol" class="landing-card column pregame-only">
+          <p class="landing-title">Mode Selection</p>
           <div class="mode-grid">
             <button id="mode1v1Btn" class="secondary mode-btn active-mode">1v1</button>
             <button id="mode2v2Btn" class="secondary mode-btn">2v2</button>
-            <button id="modeRoomBtn" class="secondary mode-btn">Room</button>
+            <button id="modeRoomBtn" class="secondary mode-btn">5v5 Room</button>
             <button id="modeSettingsBtn" class="secondary mode-btn">Settings</button>
           </div>
-          <button id="quickMatchBtn">Start Match</button>
-          <button id="cancelQuickBtn" class="secondary">Cancel Search</button>
-          <button id="hostBtn">Create Room</button>
-          <input id="roomInput" maxlength="8" placeholder="ROOM CODE" />
-          <button id="joinBtn" class="secondary">Join Room</button>
+          <div id="roomJoinRow" class="row" style="display: none;">
+            <input id="roomInput" class="normal-case" maxlength="8" placeholder="ENTER CODE" />
+            <button id="joinBtn" class="secondary">Join</button>
+          </div>
+          <button id="mainStartBtn" class="start-hero" style="margin-top:auto;">START MATCH</button>
+        </section>
+
+        <!-- New Team Lobby Column -->
+        <section id="teamLobbyCol" class="landing-card column pregame-only" style="display: none;">
+          <p class="landing-title" id="lobbyTitle">Players Room</p>
+          <div class="row" style="justify-content: space-between;">
+            <p class="meta" id="lobbyRoomLabel" style="font-weight:bold;">Code: ----</p>
+            <label class="meta" style="cursor: pointer; display:flex; align-items:center; gap:4px;">
+              <input type="checkbox" id="autofillCheck" checked> Auto-fill
+            </label>
+          </div>
+          
+          <div class="row" style="flex:1;">
+            <div style="flex:1; border: 1px solid #1b7a5b; background: rgba(57,255,184,0.1); border-radius: 8px; padding: 6px; display: flex; flex-direction: column; gap:4px;" id="leftTeamBox">
+                <p class="meta" style="color: #39ffb8; font-weight:bold; margin:0 0 4px; text-align:center;">Team 1</p>
+                <div id="leftTeamSlots" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:4px; max-height:160px;"></div>
+                <button id="joinLeftBtn" class="secondary mini-btn" style="width:100%; border-color:#39ffb8; color:#39ffb8; margin-top:auto;">Join Team 1</button>
+            </div>
+            
+            <div style="flex:1; border: 1px solid #e45858; background: rgba(255,100,127,0.1); border-radius: 8px; padding: 6px; display: flex; flex-direction: column; gap:4px;" id="rightTeamBox">
+                <p class="meta" style="color: #ff647f; font-weight:bold; margin:0 0 4px; text-align:center;">Team 2</p>
+                <div id="rightTeamSlots" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:4px; max-height:160px;"></div>
+                <button id="joinRightBtn" class="secondary mini-btn" style="width:100%; border-color:#ff647f; color:#ff647f; margin-top:auto;">Join Team 2</button>
+            </div>
+          </div>
+          
+          <button id="lobbyStartBtn" class="start-hero" style="margin-top:auto;">READY</button>
+          <button id="leaveLobbyBtn" class="secondary" style="min-height:36px; font-size:14px; margin-top:0;">Leave Lobby</button>
         </section>
 
         <section class="landing-card column pregame-only">
@@ -540,9 +575,9 @@
             <button id="soundBtn" class="secondary">Sound: On</button>
             <button id="toggleControlsBtn" class="secondary toggle-off">&#x1F579;&#xFE0F; AUTO</button>
           </div>
-          <p class="meta" id="roomLabel">Room: -</p>
-          <p class="meta" id="playersLabel">Players: 0/2</p>
-          <p class="meta" id="sidesLabel">Sides: Left - | Right -</p>
+          <p class="meta" id="roomLabel" style="display:none;">Room: -</p>
+          <p class="meta" id="playersLabel" style="display:none;">Players: 0/2</p>
+          <p class="meta" id="sidesLabel" style="display:none;">Sides: Left - | Right -</p>
           <p class="meta" id="onlineLabel">Online: 0</p>
         </section>
 
