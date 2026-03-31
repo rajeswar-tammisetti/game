@@ -3,9 +3,6 @@ const socket = io();
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
 
-const hostBtn = document.getElementById("hostBtn");
-const joinBtn = document.getElementById("joinBtn");
-const homeStartBtn = document.getElementById("homeStartBtn");
 const mode1v1Btn = document.getElementById("mode1v1Btn");
 const mode2v2Btn = document.getElementById("mode2v2Btn");
 const modeRoomBtn = document.getElementById("modeRoomBtn");
@@ -18,10 +15,20 @@ const quitBtn = document.getElementById("quitBtn");
 const soundBtn = document.getElementById("soundBtn");
 const toggleControlsBtn = document.getElementById("toggleControlsBtn");
 const setNameBtn = document.getElementById("setNameBtn");
-const quickMatchBtn = document.getElementById("quickMatchBtn");
-const cancelQuickBtn = document.getElementById("cancelQuickBtn");
-const leftSideBtn = document.getElementById("leftSideBtn");
-const rightSideBtn = document.getElementById("rightSideBtn");
+const roomJoinRow = document.getElementById("roomJoinRow");
+const startCol = document.getElementById("startCol");
+const teamLobbyCol = document.getElementById("teamLobbyCol");
+const mainStartBtn = document.getElementById("mainStartBtn");
+const lobbyRoomLabel = document.getElementById("lobbyRoomLabel");
+const leftTeamSlots = document.getElementById("leftTeamSlots");
+const rightTeamSlots = document.getElementById("rightTeamSlots");
+const joinLeftBtn = document.getElementById("joinLeftBtn");
+const joinRightBtn = document.getElementById("joinRightBtn");
+const lobbyStartBtn = document.getElementById("lobbyStartBtn");
+const leaveLobbyBtn = document.getElementById("leaveLobbyBtn");
+const autofillCheck = document.getElementById("autofillCheck");
+
+const joinBtn = document.getElementById("joinBtn");
 const playerColorInput = document.getElementById("playerColorInput");
 
 const roomInput = document.getElementById("roomInput");
@@ -91,10 +98,12 @@ let restartRequesterId = null;
 let pendingChallengeFromId = null;
 let controlsForcedVisible = false;
 let preferredSide = "left";
-let myColor = "#58a0ff";
-let roomSides = { left: null, right: null };
+let myColor = "#00e5ff";
+let roomSides = { left: [], right: [] };
 let selectedMode = "1v1";
 let matchStartedAt = 0;
+let searchInterval = null;
+let searchingLobby = false;
 
 let players = {};
 let pickup = { active: false, type: null, x: 0, y: 0 };
@@ -328,12 +337,23 @@ function updateModeButtons() {
 }
 
 function updateMatchTopbar() {
-  const leftId = roomSides.left?.id || Object.keys(players).find((id) => players[id]?.side === "left");
-  const rightId = roomSides.right?.id || Object.keys(players).find((id) => players[id]?.side === "right");
-  const leftName = leftId ? (players[leftId]?.name || roomSides.left?.name || "Player 1") : "Player 1";
-  const rightName = rightId ? (players[rightId]?.name || roomSides.right?.name || "Player 2") : "Player 2";
-  const leftScore = leftId ? (players[leftId]?.kills || 0) : 0;
-  const rightScore = rightId ? (players[rightId]?.kills || 0) : 0;
+  let leftScore = 0;
+  let rightScore = 0;
+  let leftWins = 0;
+  let rightWins = 0;
+
+  for (const p of Object.values(players)) {
+    if (p.side === "left") {
+      leftScore += (p.kills || 0);
+      leftWins = Math.max(leftWins, p.roundWins || 0);
+    } else if (p.side === "right") {
+      rightScore += (p.kills || 0);
+      rightWins = Math.max(rightWins, p.roundWins || 0);
+    }
+  }
+
+  const leftName = roomSides.left?.[0]?.name ? `${roomSides.left[0].name}${roomSides.left.length > 1 ? ' +' : ''}` : "Team 1";
+  const rightName = roomSides.right?.[0]?.name ? `${roomSides.right[0].name}${roomSides.right.length > 1 ? ' +' : ''}` : "Team 2";
 
   topLeftNameEl.textContent = leftName;
   topRightNameEl.textContent = rightName;
@@ -468,10 +488,43 @@ function tryShoot() {
   playTone(650, 0.05, "square", 0.03);
 }
 
-hostBtn.onclick = () => {
+function startSearchTimer(btn) {
+  let sec = 0;
+  btn.disabled = true;
+  if (searchInterval) clearInterval(searchInterval);
+  searchInterval = setInterval(() => {
+    sec++;
+    const mm = String(Math.floor(sec / 60)).padStart(2, "0");
+    const ss = String(sec % 60).padStart(2, "0");
+    btn.textContent = `00:${ss}`; // Using simple timer format
+  }, 1000);
+  btn.textContent = "00:00";
+}
+
+function stopSearchTimer(btn, text) {
+  if (searchInterval) clearInterval(searchInterval);
+  searchInterval = null;
+  btn.disabled = false;
+  btn.textContent = text;
+}
+
+mainStartBtn.onclick = () => {
   if (!requireNameBeforePlay()) return;
-  socket.emit("create_room", { preferredSide });
-  setStatus("Creating room...");
+  if (selectedMode === "1v1") {
+    if (searchingLobby) {
+      socket.emit("cancel_quick_match");
+      searchingLobby = false;
+      stopSearchTimer(mainStartBtn, "START MATCH");
+      return;
+    }
+    socket.emit("request_quick_match");
+  } else if (selectedMode === "2v2") {
+    socket.emit("create_room", { preferredSide: "left", mode: "2v2" });
+    setStatus("Creating 2v2 lobby...");
+  } else if (selectedMode === "room") {
+    socket.emit("create_room", { preferredSide: "left", mode: "room" });
+    setStatus("Creating 5v5 Room...");
+  }
 };
 
 joinBtn.onclick = () => {
@@ -481,9 +534,48 @@ joinBtn.onclick = () => {
     setStatus("Enter room code first.", true);
     return;
   }
-  socket.emit("join_room", { roomCode: code, preferredSide });
+  socket.emit("join_room", { roomCode: code, preferredSide: "left" });
   setStatus(`Joining ${code}...`);
 };
+
+function requireNameBeforePlay() {
+  const n = nameInput.value.trim();
+  if (n.length < 2) {
+    setStatus("Set your name first in settings.", true);
+    return false;
+  }
+  return true;
+}
+
+function doSetName() {
+  const n = nameInput.value.trim();
+  if (n.length < 2) {
+    setStatus("Name must be at least 2 characters.", true);
+    return;
+  }
+  console.log("[debug] emitting set_name:", n);
+  socket.emit("set_name", { name: n });
+}
+
+setNameBtn.onclick = doSetName;
+nameInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); doSetName(); }
+});
+
+lobbyStartBtn.onclick = () => {
+  if (searchingLobby) {
+    socket.emit("cancel_lobby_search");
+  } else {
+    socket.emit("start_lobby_search", { autofill: autofillCheck.checked });
+  }
+};
+
+leaveLobbyBtn.onclick = () => {
+  socket.emit("leave_room");
+};
+
+joinLeftBtn.onclick = () => socket.emit("choose_side", { side: "left" });
+joinRightBtn.onclick = () => socket.emit("choose_side", { side: "right" });
 
 setLimitBtn.onclick = () => {
   const raw = Number(scoreLimitInput.value);
@@ -511,74 +603,39 @@ challengeDeclineBtn.onclick = () => {
   challengePrompt.style.display = "none";
 };
 
-setNameBtn.onclick = () => {
-  const n = nameInput.value.trim();
-  if (n.length < 2) {
-    setStatus("Name must be at least 2 characters.", true);
-    return;
-  }
-  socket.emit("set_name", { name: n });
-};
 
-quickMatchBtn.onclick = () => {
-  if (!requireNameBeforePlay()) return;
-  socket.emit("request_quick_match");
-};
-cancelQuickBtn.onclick = () => socket.emit("cancel_quick_match");
-homeStartBtn.onclick = () => {
-  if (!requireNameBeforePlay()) return;
-  if (selectedMode === "2v2") {
-    setStatus("2v2 is coming soon. Use 1v1 or Room mode for now.", true);
-    return;
-  }
-  if (selectedMode === "room") {
-    socket.emit("create_room", { preferredSide });
-    setStatus("Creating room...");
-    return;
-  }
-  if (selectedMode === "settings") {
-    setStatus("Settings mode selected. Configure options below.", false);
-    return;
-  }
-  socket.emit("request_quick_match");
-};
+
 mode1v1Btn.onclick = () => {
   selectedMode = "1v1";
   updateModeButtons();
+  roomJoinRow.style.display = "none";
+  mainStartBtn.textContent = "START MATCH";
   setStatus("Mode: 1v1 quick match.");
 };
 mode2v2Btn.onclick = () => {
   selectedMode = "2v2";
   updateModeButtons();
-  setStatus("2v2 mode is not available yet.", true);
+  roomJoinRow.style.display = "none";
+  mainStartBtn.textContent = "CREATE 2V2";
+  setStatus("Mode: 2v2 selected.");
 };
 modeRoomBtn.onclick = () => {
   selectedMode = "room";
   updateModeButtons();
+  roomJoinRow.style.display = "flex";
+  mainStartBtn.textContent = "CREATE 5V5";
   setStatus("Mode: Room match (create/join by code).");
 };
 modeSettingsBtn.onclick = () => {
   selectedMode = "settings";
   updateModeButtons();
+  roomJoinRow.style.display = "none";
   setStatus("Settings mode. Adjust sound/controls/side/color.");
 };
-if (leftSideBtn) {
-  leftSideBtn.onclick = () => {
-    preferredSide = "left";
-    updateSideButtons();
-    if (roomCode) socket.emit("choose_side", { side: preferredSide });
-  };
-}
-if (rightSideBtn) {
-  rightSideBtn.onclick = () => {
-    preferredSide = "right";
-    updateSideButtons();
-    if (roomCode) socket.emit("choose_side", { side: preferredSide });
-  };
-}
+
 if (playerColorInput) {
   playerColorInput.addEventListener("input", () => {
-    myColor = playerColorInput.value || "#58a0ff";
+    myColor = playerColorInput.value || "#00e5ff";
   });
 }
 chatSendBtn.onclick = sendChat;
@@ -752,9 +809,15 @@ socket.on("chat_error", ({ reason }) => {
 socket.on("profile", ({ id, name }) => {
   selfId = id;
   selfName = name || "";
-  nameInput.value = selfName;
-  if (!hasCustomName()) {
-    setStatus("Enter your name (min 2 chars) to start playing.");
+  // Only update the input box if it's empty or matches the old server name (don't overwrite user's typed text)
+  if (!nameInput.value || nameInput.value === selfName) {
+    nameInput.value = selfName;
+  }
+  if (!selfName || selfName.length < 2) {
+    setStatus("Enter your name (min 2 chars) and click Set to play.");
+  } else {
+    setStatus(`Name set to "${selfName}". Ready to play!`);
+    nameInput.value = selfName;
   }
 });
 
@@ -808,14 +871,56 @@ socket.on("room_created", ({ roomCode: code }) => {
   setStatus("Room created. Share code to invite.");
 });
 
-socket.on("room_info", ({ roomCode: code, count, max, sides }) => {
+socket.on("room_info", ({ roomCode: code, mode, count, max, teams, ownerId, searchingLobby: isSearching }) => {
   roomCode = code;
+  roomSides = teams;
   roomLabel.textContent = `Room: ${code}`;
   playersLabel.textContent = `Players: ${count}/${max}`;
-  roomSides = sides || roomSides;
-  const leftName = roomSides.left?.name || "-";
-  const rightName = roomSides.right?.name || "-";
-  sidesLabel.textContent = `Sides: Left ${leftName} | Right ${rightName}`;
+  
+  if (mode === "2v2" || mode === "room") {
+    startCol.style.display = "none";
+    teamLobbyCol.style.display = "flex";
+    lobbyRoomLabel.textContent = `Code: ${code} ${mode.toUpperCase()}`;
+    
+    leftTeamSlots.innerHTML = "";
+    rightTeamSlots.innerHTML = "";
+    teams.left.forEach(p => {
+      const d = document.createElement("div");
+      d.textContent = p.name + (p.id === ownerId ? " 👑" : "");
+      d.style.color = p.id === selfId ? myColor : "#39ffb8";
+      if (p.id === selfId) d.style.fontWeight = "bold";
+      leftTeamSlots.appendChild(d);
+    });
+    teams.right.forEach(p => {
+      const d = document.createElement("div");
+      d.textContent = p.name + (p.id === ownerId ? " 👑" : "");
+      d.style.color = p.id === selfId ? myColor : "#ff647f";
+      if (p.id === selfId) d.style.fontWeight = "bold";
+      rightTeamSlots.appendChild(d);
+    });
+
+    if (selfId === ownerId) {
+      lobbyStartBtn.style.display = "block";
+      autofillCheck.disabled = false;
+      if (isSearching) {
+        if (!searchingLobby) {
+          startSearchTimer(lobbyStartBtn);
+          searchingLobby = true;
+        }
+      } else {
+        if (searchingLobby) {
+          stopSearchTimer(lobbyStartBtn, "READY");
+          searchingLobby = false;
+        } else {
+          lobbyStartBtn.textContent = "READY";
+        }
+      }
+    } else {
+      lobbyStartBtn.style.display = "none";
+      autofillCheck.disabled = true;
+    }
+  }
+
   updateChatModeLabel();
   updateMatchTopbar();
 });
@@ -831,6 +936,8 @@ socket.on("match_ready", () => {
   challengePrompt.style.display = "none";
   pendingChallengeFromId = null;
   setInMatchUI(true);
+  startCol.style.display = "none";
+  teamLobbyCol.style.display = "none";
   updateMatchTopbar();
   appendFeed("Match ready");
   setStatus("Match ready.");
@@ -909,7 +1016,7 @@ socket.on("opponent_left", () => {
   challengePrompt.style.display = "none";
   pendingChallengeFromId = null;
   roomCode = null;
-  roomSides = { left: null, right: null };
+  roomSides = { left: [], right: [] };
   sidesLabel.textContent = "Sides: Left - | Right -";
   updateChatModeLabel();
   socket.emit("request_chat_init");
@@ -926,7 +1033,7 @@ socket.on("room_closed", ({ reason }) => {
   setMatchOverUI(false);
   winnerId = null;
   roomCode = null;
-  roomSides = { left: null, right: null };
+  roomSides = { left: [], right: [] };
   sidesLabel.textContent = "Sides: Left - | Right -";
   updateChatModeLabel();
   socket.emit("request_chat_init");
@@ -934,6 +1041,12 @@ socket.on("room_closed", ({ reason }) => {
   playersLabel.textContent = "Players: 0/2";
   setInMatchUI(false);
   updateMatchTopbar();
+  startCol.style.display = "flex";
+  teamLobbyCol.style.display = "none";
+  searchingLobby = false;
+  stopSearchTimer(lobbyStartBtn, "READY");
+  stopSearchTimer(mainStartBtn, "START MATCH");
+  
   setStatus(reason || "Room closed.");
 });
 
