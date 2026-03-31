@@ -32,6 +32,10 @@ const roomLabel = document.getElementById("roomLabel");
 const playersLabel = document.getElementById("playersLabel");
 const sidesLabel = document.getElementById("sidesLabel");
 const onlineLabel = document.getElementById("onlineLabel");
+const teamLobbyHintEl = document.getElementById("teamLobbyHint");
+const teamSlotButtons = Array.from(document.querySelectorAll(".team-slot"));
+const startMatchBtn = document.getElementById("startMatchBtn");
+const quitRoomBtn = document.getElementById("quitRoomBtn");
 const scoreMain = document.getElementById("scoreMain");
 const scoreSub = document.getElementById("scoreSub");
 const statusEl = document.getElementById("status");
@@ -93,6 +97,12 @@ let controlsForcedVisible = false;
 let preferredSide = "left";
 let myColor = "#58a0ff";
 let roomSides = { left: null, right: null };
+let roomSideMembers = { left: [], right: [] };
+let roomTeams = {
+  left: [null, null],
+  right: [null, null]
+};
+let isRoomOwner = false;
 let selectedMode = "1v1";
 let matchStartedAt = 0;
 
@@ -102,12 +112,76 @@ let onlinePlayers = [];
 let onlineCount = 0;
 let queueCount = 0;
 
+const playerRenderState = {};
+const POSITION_SMOOTHING_SPEED = 10;
+const AIM_SMOOTHING_SPEED = 14;
+const TELEPORT_SNAP_DIST = 180;
+
 const tracers = [];
 const burstFx = [];
 const floatTexts = [];
 const muzzleFx = [];
 const chatMessages = [];
 const recentShotUntil = {};
+const MAX_TRACERS = 140;
+const MAX_BURSTS = 90;
+const MAX_FLOAT_TEXTS = 90;
+const MAX_MUZZLE_FX = 140;
+
+function upsertPlayerRenderState(nextPlayers) {
+  const now = Date.now();
+  const aliveIds = new Set(Object.keys(nextPlayers || {}));
+
+  for (const [id, p] of Object.entries(nextPlayers || {})) {
+    const rs = playerRenderState[id];
+    if (!rs) {
+      playerRenderState[id] = {
+        x: p.x,
+        y: p.y,
+        aimX: p.aimX,
+        aimY: p.aimY,
+        tx: p.x,
+        ty: p.y,
+        taX: p.aimX,
+        taY: p.aimY,
+        updatedAt: now
+      };
+      continue;
+    }
+
+    const dx = p.x - rs.tx;
+    const dy = p.y - rs.ty;
+    const movedDist = Math.hypot(dx, dy);
+    rs.tx = p.x;
+    rs.ty = p.y;
+    rs.taX = p.aimX;
+    rs.taY = p.aimY;
+    rs.updatedAt = now;
+
+    // Snap on large discontinuities (spawn/respawn/side switch) to avoid trails.
+    if (movedDist >= TELEPORT_SNAP_DIST || p.isDead) {
+      rs.x = p.x;
+      rs.y = p.y;
+      rs.aimX = p.aimX;
+      rs.aimY = p.aimY;
+    }
+  }
+
+  for (const id of Object.keys(playerRenderState)) {
+    if (!aliveIds.has(id)) delete playerRenderState[id];
+  }
+}
+
+function stepPlayerRenderState(dt) {
+  const posAlpha = 1 - Math.exp(-POSITION_SMOOTHING_SPEED * dt);
+  const aimAlpha = 1 - Math.exp(-AIM_SMOOTHING_SPEED * dt);
+  for (const rs of Object.values(playerRenderState)) {
+    rs.x += (rs.tx - rs.x) * posAlpha;
+    rs.y += (rs.ty - rs.y) * posAlpha;
+    rs.aimX += (rs.taX - rs.aimX) * aimAlpha;
+    rs.aimY += (rs.taY - rs.aimY) * aimAlpha;
+  }
+}
 
 const isTouchDevice =
   window.matchMedia("(hover: none) and (pointer: coarse)").matches ||
@@ -325,13 +399,73 @@ function updateModeButtons() {
   mode2v2Btn.classList.toggle("active-mode", selectedMode === "2v2");
   modeRoomBtn.classList.toggle("active-mode", selectedMode === "room");
   modeSettingsBtn.classList.toggle("active-mode", selectedMode === "settings");
+  document.body.classList.toggle("mode-2v2", selectedMode === "2v2");
+  renderTeamLobby();
+}
+
+function setRoomTeamsFromSides() {
+  const leftA = roomSideMembers.left?.[0] || roomSides.left || null;
+  const leftB = roomSideMembers.left?.[1] || null;
+  const rightA = roomSideMembers.right?.[0] || roomSides.right || null;
+  const rightB = roomSideMembers.right?.[1] || null;
+  roomTeams = {
+    left: [leftA, leftB],
+    right: [rightA, rightB]
+  };
+}
+
+function renderTeamLobby() {
+  const mode2v2 = selectedMode === "2v2";
+  if (!teamSlotButtons.length) return;
+
+  for (const btn of teamSlotButtons) {
+    const team = btn.dataset.team === "right" ? "right" : "left";
+    const idx = Number(btn.dataset.slotIndex) === 1 ? 1 : 0;
+    const slot = roomTeams[team]?.[idx] || null;
+    const isMine = !!slot && slot.id === selfId;
+    const teamName = team === "left" ? "Team Alpha" : "Team Beta";
+
+    btn.classList.toggle("mine", isMine);
+    btn.classList.toggle("filled", !!slot && !isMine);
+
+    if (slot) {
+      btn.textContent = isMine ? `You (${slot.name || "Player"})` : (slot.name || "Player");
+    } else {
+      btn.textContent = `Join ${teamName}`;
+    }
+
+    btn.disabled = !mode2v2;
+  }
+
+  if (teamLobbyHintEl) {
+    if (!mode2v2) {
+      teamLobbyHintEl.textContent = "Switch to 2v2 mode to use team slots.";
+    } else if (!roomCode) {
+      teamLobbyHintEl.textContent = "Create or join a room, then click a slot to choose team.";
+    } else {
+      teamLobbyHintEl.textContent = "Click a slot to switch team. Settings are available below.";
+    }
+  }
+
+  // Update Start Match button visibility
+  if (startMatchBtn) {
+    const canStart = mode2v2 && roomCode && isRoomOwner;
+    startMatchBtn.style.display = canStart ? "block" : "none";
+  }
+
+  // Always show Quit Room button if we have a room code
+  if (quitRoomBtn) {
+    quitRoomBtn.style.display = roomCode ? "block" : "none";
+  }
 }
 
 function updateMatchTopbar() {
-  const leftId = roomSides.left?.id || Object.keys(players).find((id) => players[id]?.side === "left");
-  const rightId = roomSides.right?.id || Object.keys(players).find((id) => players[id]?.side === "right");
-  const leftName = leftId ? (players[leftId]?.name || roomSides.left?.name || "Player 1") : "Player 1";
-  const rightName = rightId ? (players[rightId]?.name || roomSides.right?.name || "Player 2") : "Player 2";
+  const leftLead = roomSideMembers.left?.[0] || roomSides.left || null;
+  const rightLead = roomSideMembers.right?.[0] || roomSides.right || null;
+  const leftId = leftLead?.id || Object.keys(players).find((id) => players[id]?.side === "left");
+  const rightId = rightLead?.id || Object.keys(players).find((id) => players[id]?.side === "right");
+  const leftName = leftId ? (players[leftId]?.name || leftLead?.name || "Player 1") : "Player 1";
+  const rightName = rightId ? (players[rightId]?.name || rightLead?.name || "Player 2") : "Player 2";
   const leftScore = leftId ? (players[leftId]?.kills || 0) : 0;
   const rightScore = rightId ? (players[rightId]?.kills || 0) : 0;
 
@@ -373,6 +507,20 @@ function updateChatModeLabel() {
 function sendInput() {
   if (!matchReady) return;
   socket.emit("player_input", input);
+}
+
+function resetInputState(syncNow = true) {
+  input.up = false;
+  input.down = false;
+  input.left = false;
+  input.right = false;
+  mouseFireHeld = false;
+  if (fireHoldTimer) {
+    clearInterval(fireHoldTimer);
+    fireHoldTimer = null;
+  }
+  if (joystick.active) resetJoystick();
+  if (syncNow) sendInput();
 }
 
 function setMoveFromJoystick(nx, ny) {
@@ -454,7 +602,7 @@ function tryShoot() {
   if (!matchReady || !roundLive || matchOver) return;
   if (selfId && players[selfId]) {
     const me = players[selfId];
-    if (me.isShielded) return;
+    if (me.isSpawnShielded) return;
     if (me.isDead || me.isReloading) return;
     if ((me.ammo || 0) <= 0) {
       tryReload();
@@ -470,7 +618,7 @@ function tryShoot() {
 
 hostBtn.onclick = () => {
   if (!requireNameBeforePlay()) return;
-  socket.emit("create_room", { preferredSide });
+  socket.emit("create_room", { preferredSide, gameMode: selectedMode });
   setStatus("Creating room...");
 };
 
@@ -528,11 +676,16 @@ cancelQuickBtn.onclick = () => socket.emit("cancel_quick_match");
 homeStartBtn.onclick = () => {
   if (!requireNameBeforePlay()) return;
   if (selectedMode === "2v2") {
-    setStatus("2v2 is coming soon. Use 1v1 or Room mode for now.", true);
+    if (roomCode) {
+      setStatus("2v2 team lobby active. Pick a team slot in the middle column.");
+      return;
+    }
+    socket.emit("create_room", { preferredSide, gameMode: "2v2" });
+    setStatus("2v2 lobby created. Pick a team slot in the middle column.");
     return;
   }
   if (selectedMode === "room") {
-    socket.emit("create_room", { preferredSide });
+    socket.emit("create_room", { preferredSide, gameMode: "1v1" });
     setStatus("Creating room...");
     return;
   }
@@ -550,7 +703,8 @@ mode1v1Btn.onclick = () => {
 mode2v2Btn.onclick = () => {
   selectedMode = "2v2";
   updateModeButtons();
-  setStatus("2v2 mode is not available yet.", true);
+  renderTeamLobby();
+  setStatus("Mode: 2v2 lobby. Choose your team from the middle column.");
 };
 modeRoomBtn.onclick = () => {
   selectedMode = "room";
@@ -581,6 +735,40 @@ if (playerColorInput) {
     myColor = playerColorInput.value || "#58a0ff";
   });
 }
+
+for (const btn of teamSlotButtons) {
+  btn.addEventListener("click", () => {
+    if (selectedMode !== "2v2") return;
+    if (!requireNameBeforePlay()) return;
+    if (!roomCode) {
+      setStatus("Create or join a room first, then choose a team slot.", true);
+      return;
+    }
+    const team = btn.dataset.team === "right" ? "right" : "left";
+    preferredSide = team;
+    socket.emit("choose_side", { side: preferredSide });
+    setStatus(`Requested move to ${team === "left" ? "Team Alpha" : "Team Beta"}.`);
+  });
+}
+
+if (startMatchBtn) {
+  startMatchBtn.onclick = () => {
+    if (!isRoomOwner) {
+      setStatus("Only room owner can start match.", true);
+      return;
+    }
+    socket.emit("start_match", { gameMode: selectedMode });
+    setStatus("Starting 2v2 match...");
+  };
+}
+
+if (quitRoomBtn) {
+  quitRoomBtn.onclick = () => {
+    socket.emit("leave_room");
+    setStatus("Left room.");
+  };
+}
+
 chatSendBtn.onclick = sendChat;
 chatInput.addEventListener("keydown", (e) => {
   if (e.key !== "Enter") return;
@@ -630,6 +818,12 @@ window.addEventListener("keyup", (e) => {
   if (k === "d" || k === "arrowright") input.right = false;
 });
 
+window.addEventListener("blur", () => resetInputState(true));
+window.addEventListener("pagehide", () => resetInputState(true));
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) resetInputState(true);
+});
+
 canvas.addEventListener("mousemove", (e) => {
   updateAimFromClientPos(e.clientX, e.clientY);
   updateGridHoverFromClientPos(e.clientX, e.clientY);
@@ -664,6 +858,7 @@ window.addEventListener("mouseup", () => {
 applyControlsVisibility();
 updateSideButtons();
 updateModeButtons();
+renderTeamLobby();
 
 joystickBase.addEventListener("pointerdown", (e) => {
   e.preventDefault();
@@ -779,6 +974,8 @@ socket.on("challenge_declined", ({ by }) => {
 });
 socket.on("challenge_error", ({ reason }) => setStatus(reason || "Challenge failed.", true));
 
+socket.on("start_error", ({ reason }) => setStatus(reason || "Cannot start match.", true));
+
 socket.on("quick_match_searching", () => {
   quickSearching = true;
   setStatus("Searching active players...");
@@ -801,21 +998,29 @@ socket.on("match_created", ({ source, roomCode: code }) => {
 
 socket.on("room_created", ({ roomCode: code }) => {
   roomCode = code;
+  isRoomOwner = true;
   roomInput.value = code;
   roomLabel.textContent = `Room: ${code}`;
   updateChatModeLabel();
   socket.emit("request_chat_init");
+  renderTeamLobby();
   setStatus("Room created. Share code to invite.");
 });
 
-socket.on("room_info", ({ roomCode: code, count, max, sides }) => {
+socket.on("room_info", ({ roomCode: code, count, max, sides, sideMembers, ready }) => {
   roomCode = code;
   roomLabel.textContent = `Room: ${code}`;
   playersLabel.textContent = `Players: ${count}/${max}`;
   roomSides = sides || roomSides;
-  const leftName = roomSides.left?.name || "-";
-  const rightName = roomSides.right?.name || "-";
-  sidesLabel.textContent = `Sides: Left ${leftName} | Right ${rightName}`;
+  roomSideMembers = {
+    left: Array.isArray(sideMembers?.left) ? sideMembers.left.slice(0, 2) : [],
+    right: Array.isArray(sideMembers?.right) ? sideMembers.right.slice(0, 2) : []
+  };
+  setRoomTeamsFromSides();
+  const leftNames = roomSideMembers.left.map((p) => p?.name).filter(Boolean).join(", ") || "-";
+  const rightNames = roomSideMembers.right.map((p) => p?.name).filter(Boolean).join(", ") || "-";
+  sidesLabel.textContent = `Sides: Left ${leftNames} | Right ${rightNames}`;
+  renderTeamLobby();
   updateChatModeLabel();
   updateMatchTopbar();
 });
@@ -861,6 +1066,17 @@ socket.on("match_over", ({ winnerId: wid }) => {
   winnerId = wid || null;
   setStatus(winnerId === selfId ? "You won the match." : "You lost the match.", winnerId !== selfId);
   playTone(winnerId === selfId ? 990 : 240, 0.2, "sine", 0.06);
+});
+
+socket.on("team_forfeit_result", ({ didWin }) => {
+  matchOver = true;
+  setMatchOverUI(true);
+  winnerId = null;
+  const msg = didWin ? "You won by forfeit." : "You lost by forfeit.";
+  appendFeed(msg);
+  addSystemChat(msg, didWin ? "accepted" : "rejected");
+  setStatus(msg, !didWin);
+  playTone(didWin ? 990 : 240, 0.2, "sine", 0.06);
 });
 
 socket.on("restart_requested", ({ requesterId }) => {
@@ -909,8 +1125,12 @@ socket.on("opponent_left", () => {
   challengePrompt.style.display = "none";
   pendingChallengeFromId = null;
   roomCode = null;
+  isRoomOwner = false;
   roomSides = { left: null, right: null };
+  roomSideMembers = { left: [], right: [] };
+  setRoomTeamsFromSides();
   sidesLabel.textContent = "Sides: Left - | Right -";
+  renderTeamLobby();
   updateChatModeLabel();
   socket.emit("request_chat_init");
   setInMatchUI(false);
@@ -926,8 +1146,12 @@ socket.on("room_closed", ({ reason }) => {
   setMatchOverUI(false);
   winnerId = null;
   roomCode = null;
+  isRoomOwner = false;
   roomSides = { left: null, right: null };
+  roomSideMembers = { left: [], right: [] };
+  setRoomTeamsFromSides();
   sidesLabel.textContent = "Sides: Left - | Right -";
+  renderTeamLobby();
   updateChatModeLabel();
   socket.emit("request_chat_init");
   roomLabel.textContent = "Room: -";
@@ -947,6 +1171,7 @@ socket.on("room_settings", ({ scoreLimit: limit }) => {
 socket.on("state", (snapshot) => {
   selfId = snapshot.you;
   players = snapshot.players || {};
+  upsertPlayerRenderState(players);
   scoreLimit = snapshot.scoreLimit || scoreLimit;
   roundsToWin = snapshot.roundsToWin || roundsToWin;
   roundNumber = snapshot.roundNumber || roundNumber;
@@ -979,13 +1204,16 @@ socket.on("shot_fired", (shot) => {
     hit: !!shot.hit,
     expiresAt: Date.now() + 90
   });
+  if (muzzleFx.length > MAX_MUZZLE_FX) muzzleFx.splice(0, muzzleFx.length - MAX_MUZZLE_FX);
 
   tracers.push({
     ...shot,
     expiresAt: Date.now() + 120
   });
+  if (tracers.length > MAX_TRACERS) tracers.splice(0, tracers.length - MAX_TRACERS);
   if (shot.hit) {
     burstFx.push({ x: shot.endX, y: shot.endY, expiresAt: Date.now() + 180 });
+    if (burstFx.length > MAX_BURSTS) burstFx.splice(0, burstFx.length - MAX_BURSTS);
     floatTexts.push({
       x: shot.endX + (Math.random() * 18 - 9),
       y: shot.endY - 12,
@@ -993,6 +1221,7 @@ socket.on("shot_fired", (shot) => {
       color: "#ffd27f",
       expiresAt: Date.now() + 520
     });
+    if (floatTexts.length > MAX_FLOAT_TEXTS) floatTexts.splice(0, floatTexts.length - MAX_FLOAT_TEXTS);
     playTone(450, 0.04, "triangle", 0.03);
   }
 });
@@ -1097,6 +1326,11 @@ function drawPickup(now) {
 function drawPlayers(now) {
   const mySide = selfId && players[selfId] ? players[selfId].side : null;
   for (const [id, p] of Object.entries(players)) {
+    const rs = playerRenderState[id];
+    const px = id === selfId || !rs ? p.x : rs.x;
+    const py = id === selfId || !rs ? p.y : rs.y;
+    const paimX = id === selfId || !rs ? p.aimX : rs.aimX;
+    const paimY = id === selfId || !rs ? p.aimY : rs.aimY;
     const isMe = id === selfId;
     const dead = p.isDead;
     const isFriendly = mySide && p.side === mySide;
@@ -1105,8 +1339,8 @@ function drawPlayers(now) {
     const bob = dead ? 0 : Math.sin(now / 210 + phase * Math.PI * 2) * 1.6;
 
     if (!dead) {
-      const dx = p.aimX - p.x;
-      const dy = p.aimY - p.y;
+      const dx = paimX - px;
+      const dy = paimY - py;
       const len = Math.hypot(dx, dy) || 1;
       const dirX = dx / len;
       const dirY = dy / len;
@@ -1115,7 +1349,7 @@ function drawPlayers(now) {
 
       // Gun body with tiny recoil animation.
       ctx.save();
-      ctx.translate(p.x + bob, p.y + bob);
+      ctx.translate(px + bob, py + bob);
       ctx.rotate(angle);
       const gunBaseColor = isMe ? myColor : (isFriendly ? "#bfffe8" : "#ffd1da");
       const gunGlow = isMe
@@ -1134,8 +1368,8 @@ function drawPlayers(now) {
         : (isFriendly ? "rgba(90,255,200,.8)" : "rgba(255,137,156,.8)");
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(p.x + bob, p.y + bob);
-      ctx.lineTo(p.x + bob + dirX * 34, p.y + bob + dirY * 34);
+      ctx.moveTo(px + bob, py + bob);
+      ctx.lineTo(px + bob + dirX * 34, py + bob + dirY * 34);
       ctx.stroke();
     }
 
@@ -1143,12 +1377,12 @@ function drawPlayers(now) {
       ctx.strokeStyle = "rgba(136,255,225,0.75)";
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(p.x + bob, p.y + bob, 22 + Math.sin(now / 110) * 1.8, 0, Math.PI * 2);
+      ctx.arc(px + bob, py + bob, 22 + Math.sin(now / 110) * 1.8, 0, Math.PI * 2);
       ctx.stroke();
     }
 
-    const bodyX = p.x + bob;
-    const bodyY = p.y + bob;
+    const bodyX = px + bob;
+    const bodyY = py + bob;
     const bodyGrad = ctx.createRadialGradient(bodyX - 6, bodyY - 8, 2, bodyX, bodyY, 24);
     bodyGrad.addColorStop(0, dead ? "#7b818a" : isMe ? "#89baff" : (isFriendly ? "#9dffd8" : "#ffa4b5"));
     bodyGrad.addColorStop(1, dead ? "#4c535d" : c);
@@ -1277,8 +1511,11 @@ function drawHud(now) {
   ctx.fillText(`HP: ${me.hp}`, 12, 24);
   ctx.fillText(`AMMO: ${me.ammo ?? CLIP_SIZE}/${CLIP_SIZE}`, 12, 46);
   let effectY = 68;
-  if (me.isShielded) {
+  if (me.isSpawnShielded) {
     ctx.fillText("SPAWN SHIELD", 12, effectY);
+    effectY += 22;
+  } else if (me.isShielded) {
+    ctx.fillText("SHIELD", 12, effectY);
     effectY += 22;
   }
   if (me.hasSpeedBoost) {
@@ -1332,7 +1569,12 @@ function drawHud(now) {
   }
 }
 
+let lastRenderPerf = performance.now();
+
 function render(nowPerf = performance.now()) {
+  const dt = Math.min(0.05, Math.max(0.001, (nowPerf - lastRenderPerf) / 1000));
+  lastRenderPerf = nowPerf;
+  stepPlayerRenderState(dt);
   const nowMs = Date.now();
   updateMatchTopbar();
   drawArena(nowPerf);

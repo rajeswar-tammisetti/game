@@ -88,18 +88,24 @@ function slotToSide(slot) {
   return slot === 1 ? "right" : "left";
 }
 
-function getOccupiedSlots(room) {
-  const occupied = new Set();
-  for (const p of room.players.values()) occupied.add(p.slot === 1 ? 1 : 0);
-  return occupied;
-}
-
 function chooseAvailableSlot(room, preferredSide) {
-  const occupied = getOccupiedSlots(room);
   const preferredSlot = sideToSlot(preferredSide);
-  if (!occupied.has(preferredSlot)) return preferredSlot;
   const other = preferredSlot === 0 ? 1 : 0;
-  if (!occupied.has(other)) return other;
+  const maxPerSide = room.gameMode === "2v2" ? 2 : 1;
+
+  let leftCount = 0;
+  let rightCount = 0;
+  for (const p of room.players.values()) {
+    if (p.slot === 1) rightCount += 1;
+    else leftCount += 1;
+  }
+
+  const preferredCount = preferredSlot === 1 ? rightCount : leftCount;
+  if (preferredCount < maxPerSide) return preferredSlot;
+
+  const otherCount = other === 1 ? rightCount : leftCount;
+  if (otherCount < maxPerSide) return other;
+
   return null;
 }
 
@@ -199,6 +205,40 @@ function baseSpawn(slot) {
   return slot === 0 ? { x: 150, y: ARENA.height / 2 } : { x: ARENA.width - 150, y: ARENA.height / 2 };
 }
 
+function sideSpawnOffsetByIndex(index) {
+  if (index <= 0) return 0;
+  const step = 90;
+  const k = Math.floor((index + 1) / 2);
+  const sign = index % 2 === 1 ? -1 : 1;
+  return sign * k * step;
+}
+
+function pickSideSpawn(room, slot, playerId = null) {
+  const base = baseSpawn(slot);
+  if (!room) return { x: base.x, y: base.y };
+
+  const teammates = [];
+  for (const [id, p] of room.players) {
+    if ((p.slot === 1 ? 1 : 0) !== slot) continue;
+    if (playerId && id === playerId) continue;
+    teammates.push(id);
+  }
+
+  teammates.sort();
+  let index = teammates.length;
+  if (playerId && room.players.has(playerId)) {
+    teammates.push(playerId);
+    teammates.sort();
+    index = teammates.indexOf(playerId);
+  }
+
+  const offsetY = sideSpawnOffsetByIndex(index);
+  return {
+    x: base.x,
+    y: clamp(base.y + offsetY, PLAYER_RADIUS, ARENA.height - PLAYER_RADIUS)
+  };
+}
+
 function chooseSafeSpawn(room, respawnId) {
   const now = Date.now();
   const enemies = [];
@@ -284,7 +324,7 @@ function consumePickup(room, playerId) {
     player.multiplierUntil = Date.now() + MULTIPLIER_MS;
     player.multiplierValue = randomMult;
   } else if (room.pickup.type === "shield") {
-    player.spawnShieldUntil = Date.now() + SHIELD_PICKUP_MS;
+    player.shieldUntil = Date.now() + SHIELD_PICKUP_MS;
   } else if (room.pickup.type === "triple") {
     player.tripleUntil = Date.now() + TRIPLE_SHOT_MS;
   }
@@ -301,13 +341,14 @@ function consumePickup(room, playerId) {
   room.pickup.nextSpawnAt = Date.now() + PICKUP_RESPAWN_MS;
 }
 
-function makePlayer(slot) {
-  const p = baseSpawn(slot);
+function makePlayer(room, playerId, slot) {
+  const normalizedSlot = slot === 1 ? 1 : 0;
+  const p = pickSideSpawn(room, normalizedSlot, playerId);
   return {
-    slot: slot === 1 ? 1 : 0,
+    slot: normalizedSlot,
     x: p.x,
     y: p.y,
-    aimX: p.x + (slot === 0 ? 1 : -1),
+    aimX: p.x + (normalizedSlot === 0 ? 1 : -1),
     aimY: p.y,
     hp: MAX_HP,
     kills: 0, // kills for current round
@@ -321,6 +362,7 @@ function makePlayer(slot) {
     reloadingUntil: 0,
     deadUntil: 0,
     spawnShieldUntil: Date.now() + RESPAWN_PROTECT_MS,
+    shieldUntil: 0,
     speedUntil: 0,
     multiplierUntil: 0,
     multiplierValue: 1,
@@ -328,12 +370,13 @@ function makePlayer(slot) {
   };
 }
 
-function resetPlayerForRound(player, slot) {
-  const p = baseSpawn(slot);
-  player.slot = slot === 1 ? 1 : 0;
+function resetPlayerForRound(room, playerId, player, slot) {
+  const normalizedSlot = slot === 1 ? 1 : 0;
+  player.slot = normalizedSlot;
+  const p = pickSideSpawn(room, normalizedSlot, playerId);
   player.x = p.x;
   player.y = p.y;
-  player.aimX = p.x + (slot === 0 ? 1 : -1);
+  player.aimX = p.x + (normalizedSlot === 0 ? 1 : -1);
   player.aimY = p.y;
   player.hp = MAX_HP;
   player.kills = 0;
@@ -343,6 +386,7 @@ function resetPlayerForRound(player, slot) {
   player.reloadingUntil = 0;
   player.deadUntil = 0;
   player.spawnShieldUntil = Date.now() + RESPAWN_PROTECT_MS;
+  player.shieldUntil = 0;
   player.speedUntil = 0;
   player.multiplierUntil = 0;
   player.multiplierValue = 1;
@@ -362,11 +406,11 @@ function resetMatch(room) {
   room.roundCountdownUntil = Date.now() + ROUND_COUNTDOWN_MS;
   room.pickup = createPickup();
 
-  for (const player of room.players.values()) {
+  for (const [id, player] of room.players) {
     player.totalKills = 0;
     player.totalDeaths = 0;
     player.roundWins = 0;
-    resetPlayerForRound(player, player.slot);
+    resetPlayerForRound(room, id, player, player.slot);
   }
 }
 
@@ -377,8 +421,8 @@ function startNextRound(room) {
   room.roundCountdownUntil = Date.now() + ROUND_COUNTDOWN_MS;
   room.pickup = createPickup();
 
-  for (const player of room.players.values()) {
-    resetPlayerForRound(player, player.slot);
+  for (const [id, player] of room.players) {
+    resetPlayerForRound(room, id, player, player.slot);
   }
 
   io.to(room.roomCode).emit("round_countdown", {
@@ -392,6 +436,8 @@ function getRoomStateForClient(room, selfId) {
   const players = {};
   for (const [id, p] of room.players) {
     const isReloading = p.reloadingUntil > now;
+    const isSpawnShielded = p.spawnShieldUntil > now;
+    const hasShieldPowerup = p.shieldUntil > now;
     players[id] = {
       x: p.x,
       y: p.y,
@@ -404,7 +450,8 @@ function getRoomStateForClient(room, selfId) {
       totalDeaths: p.totalDeaths,
       roundWins: p.roundWins,
       isDead: p.deadUntil > now,
-      isShielded: p.spawnShieldUntil > now,
+      isShielded: isSpawnShielded || hasShieldPowerup,
+      isSpawnShielded,
       hasSpeedBoost: p.speedUntil > now,
       hasMultiplier: p.multiplierUntil > now,
       multiplierValue: p.multiplierUntil > now ? p.multiplierValue : 1,
@@ -437,18 +484,62 @@ function getRoomStateForClient(room, selfId) {
 function emitRoomInfo(room) {
   let left = null;
   let right = null;
+  const leftMembers = [];
+  const rightMembers = [];
+  let leftCount = 0;
+  let rightCount = 0;
   for (const [id, p] of room.players) {
     const name = clients.get(id)?.name || "Player";
     const info = { id, name };
-    if (p.slot === 1) right = info;
-    else left = info;
+    if (p.slot === 1) {
+      rightCount += 1;
+      rightMembers.push(info);
+      if (!right) right = info;
+    } else {
+      leftCount += 1;
+      leftMembers.push(info);
+      if (!left) left = info;
+    }
   }
   io.to(room.roomCode).emit("room_info", {
     roomCode: room.roomCode,
     count: room.players.size,
-    max: 2,
-    sides: { left, right }
+    max: room.gameMode === "2v2" ? 4 : 2,
+    sides: { left, right },
+    sideMembers: { left: leftMembers, right: rightMembers },
+    sideCounts: { left: leftCount, right: rightCount }
   });
+}
+
+function getSideCounts(room) {
+  let left = 0;
+  let right = 0;
+  for (const p of room.players.values()) {
+    if (p.slot === 1) right += 1;
+    else left += 1;
+  }
+  return { left, right };
+}
+
+function closeRoomForAll(room, reason, winnerSide = null) {
+  const playerIds = Array.from(room.players.keys());
+  for (const playerId of playerIds) {
+    const s = io.sockets.sockets.get(playerId);
+    if (!s) continue;
+    if (winnerSide) {
+      const p = room.players.get(playerId);
+      const playerSide = p && p.slot === 1 ? "right" : "left";
+      s.emit("team_forfeit_result", {
+        winnerSide,
+        didWin: playerSide === winnerSide,
+        reason
+      });
+    }
+    s.data.roomCode = null;
+    s.leave(room.roomCode);
+    s.emit("room_closed", { reason });
+  }
+  rooms.delete(room.roomCode);
 }
 
 function beginReload(room, playerId, now = Date.now()) {
@@ -471,8 +562,9 @@ function resolveSingleRay(room, shooterId, dirX, dirY, damageOut, now) {
 
   for (const [targetId, target] of room.players) {
     if (targetId === shooterId) continue;
+    if ((target.slot === 1 ? 1 : 0) === (shooter.slot === 1 ? 1 : 0)) continue;
     if (target.deadUntil > now) continue;
-    if (target.spawnShieldUntil > now) continue;
+    if (target.spawnShieldUntil > now || target.shieldUntil > now) continue;
 
     const tx = target.x - shooter.x;
     const ty = target.y - shooter.y;
@@ -537,6 +629,7 @@ function resolveShoot(room, shooterId, shotAim) {
   if (room.matchOver) return null;
   if (shooter.deadUntil > now) return null;
   // Spawn shield is invincibility + no-shoot window to prevent respawn advantage.
+  // Pickup shield is invincibility only and does not block firing.
   if (shooter.spawnShieldUntil > now) return null;
   if (shooter.reloadingUntil > now) return null;
   if (shooter.ammo <= 0) {
@@ -615,7 +708,9 @@ function createRoomForPair(socketA, socketB, source = "quick_match") {
     restartRequesterId: null,
     restartVotes: new Set(),
     pickup: createPickup(),
-    chatMessages: []
+    chatMessages: [],
+    gameMode: "1v1",
+    matchStartRequested: false
   };
   rooms.set(roomCode, room);
 
@@ -624,8 +719,8 @@ function createRoomForPair(socketA, socketB, source = "quick_match") {
   socketA.data.roomCode = roomCode;
   socketB.data.roomCode = roomCode;
 
-  room.players.set(socketA.id, makePlayer(0));
-  room.players.set(socketB.id, makePlayer(1));
+  room.players.set(socketA.id, makePlayer(room, socketA.id, 0));
+  room.players.set(socketB.id, makePlayer(room, socketB.id, 1));
 
   resetMatch(room);
   emitRoomInfo(room);
@@ -786,7 +881,7 @@ io.on("connection", (socket) => {
     pushLobbySnapshot();
   });
 
-  socket.on("create_room", ({ preferredSide } = {}) => {
+  socket.on("create_room", ({ preferredSide, gameMode } = {}) => {
     if (!hasCustomName(socket.id)) {
       emitNameRequired(socket, "join_failed");
       return;
@@ -814,14 +909,16 @@ io.on("connection", (socket) => {
       restartRequesterId: null,
       restartVotes: new Set(),
       pickup: createPickup(),
-      chatMessages: []
+      chatMessages: [],
+      gameMode: gameMode || "1v1",
+      matchStartRequested: false
     };
     rooms.set(roomCode, room);
 
     socket.join(roomCode);
     socket.data.roomCode = roomCode;
     const slot = chooseAvailableSlot(room, preferredSide);
-    room.players.set(socket.id, makePlayer(slot === null ? 0 : slot));
+    room.players.set(socket.id, makePlayer(room, socket.id, slot === null ? 0 : slot));
 
     socket.emit("room_created", { roomCode });
     emitRoomInfo(room);
@@ -846,7 +943,9 @@ io.on("connection", (socket) => {
       socket.emit("join_failed", { reason: "Room not found" });
       return;
     }
-    if (room.players.size >= 2) {
+    
+    const maxPlayers = room.gameMode === "2v2" ? 4 : 2;
+    if (room.players.size >= maxPlayers) {
       socket.emit("join_failed", { reason: "Room is full" });
       return;
     }
@@ -865,7 +964,7 @@ io.on("connection", (socket) => {
       socket.emit("join_failed", { reason: "No side slot available" });
       return;
     }
-    room.players.set(socket.id, makePlayer(slot));
+    room.players.set(socket.id, makePlayer(room, socket.id, slot));
     room.restartPending = false;
     room.restartRequesterId = null;
     room.restartVotes = new Set();
@@ -873,7 +972,7 @@ io.on("connection", (socket) => {
     emitRoomInfo(room);
     socket.emit("chat_init", { messages: room.chatMessages || [] });
 
-    if (room.players.size === 2) {
+    if (room.players.size === 2 && room.gameMode !== "2v2") {
       resetMatch(room);
       io.to(code).emit("match_ready");
       io.to(code).emit("round_countdown", {
@@ -891,19 +990,50 @@ io.on("connection", (socket) => {
     if (!room) return;
     const player = room.players.get(socket.id);
     if (!player) return;
-    if (room.players.size >= 2) {
+    if (room.players.size >= 2 && room.gameMode !== "2v2") {
       socket.emit("join_failed", { reason: "Side lock after both players joined." });
       return;
     }
     const desired = sideToSlot(side);
-    for (const [id, p] of room.players) {
-      if (id !== socket.id && p.slot === desired) {
-        socket.emit("join_failed", { reason: "Selected side already taken." });
+    const current = player.slot === 1 ? 1 : 0;
+    if (desired !== current) {
+      let desiredCount = 0;
+      for (const p of room.players.values()) {
+        if ((p.slot === 1 ? 1 : 0) === desired) desiredCount += 1;
+      }
+      const maxPerSide = room.gameMode === "2v2" ? 2 : 1;
+      if (desiredCount >= maxPerSide) {
+        socket.emit("join_failed", {
+          reason: room.gameMode === "2v2" ? "Selected team is full." : "Selected side already taken."
+        });
         return;
       }
     }
-    resetPlayerForRound(player, desired);
+    resetPlayerForRound(room, socket.id, player, desired);
     emitRoomInfo(room);
+  });
+
+  socket.on("start_match", ({ gameMode }) => {
+    const roomCode = socket.data.roomCode;
+    const room = roomCode ? rooms.get(roomCode) : null;
+    if (!room) return;
+    if (socket.id !== room.ownerId) {
+      socket.emit("start_error", { reason: "Only room owner can start match." });
+      return;
+    }
+    if (room.players.size < 2) {
+      socket.emit("start_error", { reason: "Need at least 2 players." });
+      return;
+    }
+    room.gameMode = gameMode || "1v1";
+    room.matchStartRequested = true;
+    resetMatch(room);
+    io.to(roomCode).emit("match_ready");
+    io.to(roomCode).emit("round_countdown", {
+      roundNumber: room.roundNumber,
+      endsAt: room.roundCountdownUntil
+    });
+    pushActivity({ actorId: socket.id, action: `started ${gameMode || "1v1"} match`, roomCode });
   });
 
   socket.on("set_score_limit", ({ limit }) => {
@@ -999,11 +1129,6 @@ io.on("connection", (socket) => {
       if (shooter && shooter.kills >= room.scoreLimit) {
         handleRoundWin(room, socket.id);
       }
-      pushActivity({
-        actorId: socket.id,
-        action: `eliminated ${clients.get(shot.targetId)?.name || "Player"}`,
-        roomCode
-      });
     }
   });
 
@@ -1090,7 +1215,17 @@ io.on("connection", (socket) => {
     socket.emit("room_closed", { reason: "You left the match." });
     pushActivity({ actorId: socket.id, action: `left room ${roomCode}`, roomCode });
 
-    if (room.players.size === 1) {
+    if (room.players.size === 0) {
+      rooms.delete(roomCode);
+    } else if (room.gameMode === "2v2") {
+      const sideCounts = getSideCounts(room);
+      if (sideCounts.left === 0 || sideCounts.right === 0) {
+        const winnerSide = sideCounts.left > 0 ? "left" : "right";
+        closeRoomForAll(room, "Match ended by forfeit. Room closed.", winnerSide);
+      } else {
+        emitRoomInfo(room);
+      }
+    } else if (room.players.size === 1) {
       const remainingId = room.players.keys().next().value;
       const remainingSocket = io.sockets.sockets.get(remainingId);
       if (remainingSocket) {
@@ -1098,8 +1233,6 @@ io.on("connection", (socket) => {
         remainingSocket.leave(roomCode);
         remainingSocket.emit("room_closed", { reason: "Opponent quit. Returned to lobby." });
       }
-      rooms.delete(roomCode);
-    } else if (room.players.size === 0) {
       rooms.delete(roomCode);
     } else {
       emitRoomInfo(room);
@@ -1139,10 +1272,17 @@ io.on("connection", (socket) => {
     room.restartRequesterId = null;
     room.restartVotes = new Set();
 
-    io.to(roomCode).emit("opponent_left");
-    emitRoomInfo(room);
-
-    if (room.players.size === 1) {
+    if (room.players.size === 0) {
+      rooms.delete(roomCode);
+    } else if (room.gameMode === "2v2") {
+      const sideCounts = getSideCounts(room);
+      if (sideCounts.left === 0 || sideCounts.right === 0) {
+        const winnerSide = sideCounts.left > 0 ? "left" : "right";
+        closeRoomForAll(room, "Match ended by forfeit. Room closed.", winnerSide);
+      } else {
+        emitRoomInfo(room);
+      }
+    } else if (room.players.size === 1) {
       // In strict 1v1, dissolve room and return remaining player to lobby state.
       const remainingId = room.players.keys().next().value;
       const remainingSocket = io.sockets.sockets.get(remainingId);
@@ -1152,8 +1292,8 @@ io.on("connection", (socket) => {
         remainingSocket.emit("room_closed", { reason: "Opponent left. Returned to lobby." });
       }
       rooms.delete(roomCode);
-    } else if (room.players.size === 0) {
-      rooms.delete(roomCode);
+    } else {
+      emitRoomInfo(room);
     }
 
     pushActivity({ name: leavingName, action: `left room ${roomCode} and went offline`, roomCode });
@@ -1225,6 +1365,7 @@ setInterval(() => {
         player.x = sp.x;
         player.y = sp.y;
         player.spawnShieldUntil = now + RESPAWN_PROTECT_MS;
+        player.shieldUntil = 0;
         player.speedUntil = 0;
         player.multiplierUntil = 0;
         player.multiplierValue = 1;
